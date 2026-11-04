@@ -86,7 +86,8 @@ int main(void) {
     assert(image);
     memset(image, 0x90, IMAGE_SIZE);
     CHECK(bb_hooks_init(image, IMAGE_SIZE) == 0);
-    bb_image_code(0, 0x8000);  /* the fake image's "text segment" */
+    bb_image_code(0, 0x8000);       /* the fake image's "text segment" */
+    bb_image_code(0xa000, 0x1000);  /* and a second one, after data */
 
     /* 1. Everything in its default state. */
     write_ini(user, "");
@@ -124,6 +125,7 @@ int main(void) {
     CHECK(r[28] == 1 && r[29] == 0 && r[31] == 1 && r[32] == 1); /* write: code refused, data written */
     CHECK(r[30] == 0);                                           /* patch: already patched is done */
     CHECK(r[33] == 1);                                           /* eboot_sha256 from the image phase */
+    CHECK(r[34] == 1 && r[35] == 0);                             /* write: data into code refused */
     char dir[MAX_PATH];
     snprintf(dir, sizeof dir, "%s\\plugins\\good_b", user);
     CHECK(GetFileAttributesA(dir) & FILE_ATTRIBUTE_DIRECTORY && GetFileAttributesA(dir) != INVALID_FILE_ATTRIBUTES);
