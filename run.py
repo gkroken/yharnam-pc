@@ -527,6 +527,10 @@ def main():
                            *(arg for folder in generated for arg in ('--generated', folder)),
                            capture=True).strip())
     mod_view = game if game.resolve() != original_game else None
+    # Param field names for native plugins (src/plugin_params.c): from the game's own PARAMDEF
+    # files, through the mods' overlay.
+    if run_script('paramdefs.py', game, '--out', out, optional=True) is not None:
+        env['BB_PARAMDEFS'] = str(Path(out) / 'paramdefs.txt')
     # Keyboard prompts: whether the key images are among the mods in use, as the launcher's
     # Controller page or the overlay's Mods tab left mods.json (read again on an in-game restart).
     # src/key_prompts.c names the bound keys in text when the images do not match the bindings.

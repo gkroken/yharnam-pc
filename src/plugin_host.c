@@ -12,6 +12,7 @@
 #include "engine_hooks.h"
 #include "plugin_game.h"
 #include "plugin_hooks.h"
+#include "plugin_params.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -367,23 +368,6 @@ static void missing(const char *function) {
     if (first) api_log("%s is not available in this host yet; it returned the failure value", function);
 }
 
-static void *api_param_row(const char *table, uint32_t id, size_t *bytes) {
-    (void)table, (void)id;
-    if (bytes) *bytes = 0;
-    missing("param_row");
-    return NULL;
-}
-static int api_param_get(const char *table, uint32_t id, const char *field, char *out, size_t n) {
-    (void)table, (void)id, (void)field;
-    if (out && n) out[0] = 0;
-    missing("param_get");
-    return 1;
-}
-static int api_param_set(const char *table, uint32_t id, const char *field, const char *value) {
-    (void)table, (void)id, (void)field, (void)value;
-    missing("param_set");
-    return 1;
-}
 static int api_lua_event(const char *name) {
     (void)name;
     missing("lua_event");
@@ -509,16 +493,35 @@ static int api_player_block(uint32_t *block) {
     return bb_game_player_block(block);
 }
 
+/* --- params (plugin_params.c) ------------------------------------------------------------------ */
+
+static void *api_param_row(const char *table, uint32_t id, size_t *bytes) {
+    if (bytes) *bytes = 0;
+    if (g_phase < PHASE_IMAGE || !eboot_is_109()) return NULL;
+    return bb_param_row(table, id, bytes);
+}
+
+static int api_param_get(const char *table, uint32_t id, const char *field, char *out, size_t n) {
+    if (out && n) out[0] = 0;
+    if (g_phase < PHASE_IMAGE || !eboot_is_109()) return 1;
+    return bb_param_get(table, id, field, out, n);
+}
+
+static int api_param_set(const char *table, uint32_t id, const char *field, const char *value) {
+    if (g_phase < PHASE_IMAGE || !eboot_is_109() || !on_main_thread("param_set")) return 1;
+    return bb_param_set(table, id, field, value);
+}
+
+static int api_param_ids(const char *table, uint32_t *ids, size_t max, size_t *count) {
+    if (count) *count = 0;
+    if (g_phase < PHASE_IMAGE || !eboot_is_109()) return 1;
+    return bb_param_ids(table, ids, max, count);
+}
+
 static uint64_t api_symbol(const char *name) {
     (void)name;
     missing("symbol");
     return 0;
-}
-static int api_param_ids(const char *table, uint32_t *ids, size_t max, size_t *count) {
-    (void)table, (void)ids, (void)max;
-    if (count) *count = 0;
-    missing("param_ids");
-    return 1;
 }
 static int api_on_world_load(void (*fn)(uint32_t, void *), void *user) {
     (void)fn, (void)user;

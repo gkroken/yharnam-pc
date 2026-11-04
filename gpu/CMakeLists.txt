@@ -299,7 +299,7 @@ if (WIN32)
     set_target_properties(atrac9 PROPERTIES C_STANDARD 99 INTERPROCEDURAL_OPTIMIZATION OFF)
     add_executable(bb-probe ../src/probe.c ${BB_RUNTIME} ../src/compat_win.c ../src/vulkan_smoke.c ../src/cloth_rate.c
         ../src/engine_hooks.c ../src/engine_features.c ../src/pc_menu.c ../src/rebirth.c ../src/ending_trace.c ../src/input_bindings.c ../src/mouse_camera.c ../src/key_prompts.c ../src/menu_pointer.c
-        ../src/occlusion_queries.c ../src/wind_pace.c ../src/blur_kernel.c ../src/render_jobs.c ../src/effect_step_gate.c ../src/effect_smooth_steps.c ../src/light_blink.c ../src/water_gate.c ../src/frame_time.c ../src/plugin_host.c ../src/plugin_hooks.c ../src/plugin_game.c ../packaging/windows/bb-probe.rc)
+        ../src/occlusion_queries.c ../src/wind_pace.c ../src/blur_kernel.c ../src/render_jobs.c ../src/effect_step_gate.c ../src/effect_smooth_steps.c ../src/light_blink.c ../src/water_gate.c ../src/frame_time.c ../src/plugin_host.c ../src/plugin_hooks.c ../src/plugin_game.c ../src/plugin_params.c ../packaging/windows/bb-probe.rc)
     target_sources(bb-probe PRIVATE ../src/aspect_ratio.cpp)
     target_compile_definitions(bb-probe PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
     set_target_properties(bb-probe PROPERTIES C_STANDARD 11 C_EXTENSIONS OFF)
@@ -356,13 +356,13 @@ if (WIN32)
     set(BB_TEST_PLUGINS_B ${CMAKE_BINARY_DIR}/test-plugins/b)
     set(BB_TEST_PLUGINS_C ${CMAKE_BINARY_DIR}/test-plugins/c)
     add_executable(plugin-host-test EXCLUDE_FROM_ALL ../tests/test_plugin_host.c ../src/plugin_host.c
-        ../src/plugin_hooks.c ../src/plugin_game.c ../src/engine_hooks.c)
+        ../src/plugin_hooks.c ../src/plugin_game.c ../src/plugin_params.c ../src/engine_hooks.c)
     # Flag delivery and the game-state API rules through real plugins (tests/plugins/flag_plugin.c):
     # forcers in folder d, a late registrant in folder e.
     set(BB_TEST_PLUGINS_D ${CMAKE_BINARY_DIR}/test-plugins/d)
     set(BB_TEST_PLUGINS_E ${CMAKE_BINARY_DIR}/test-plugins/e)
     add_executable(flag-delivery-test EXCLUDE_FROM_ALL ../tests/test_flag_delivery.c ../src/plugin_host.c
-        ../src/plugin_hooks.c ../src/plugin_game.c ../src/engine_hooks.c)
+        ../src/plugin_hooks.c ../src/plugin_game.c ../src/plugin_params.c ../src/engine_hooks.c)
     target_include_directories(flag-delivery-test PRIVATE ../src ../include)
     target_compile_options(flag-delivery-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
     target_compile_definitions(flag-delivery-test PRIVATE WIN32_LEAN_AND_MEAN
@@ -381,6 +381,11 @@ if (WIN32)
             ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/test-plugins/lib/flag-${number})
         add_dependencies(flag-delivery-test test-flag-plugin-${number})
     endforeach()
+    # Params by field name (src/plugin_params.c) against a fake repository and param file.
+    add_executable(params-test EXCLUDE_FROM_ALL ../tests/test_params.c ../src/plugin_params.c ../src/engine_hooks.c)
+    target_include_directories(params-test PRIVATE ../src ../include)
+    target_compile_options(params-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+    target_compile_definitions(params-test PRIVATE WIN32_LEAN_AND_MEAN)
     # The game's state (src/plugin_game.c) against fake game structures in an image big enough
     # for the real addresses.
     add_executable(game-state-test EXCLUDE_FROM_ALL ../tests/test_game_state.c ../src/plugin_game.c

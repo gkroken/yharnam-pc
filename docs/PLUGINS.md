@@ -64,6 +64,7 @@ lines). A plugin's own `log()` lines start `Plugin <name>:`.
 | `call_guest` | Yes, once the game runs (not during `bb_plugin_image`, before its own start), from its main thread only (`on_frame`, or a hook running there), and only to an address in the image's code. It sets `al` for a variadic callee. |
 | `event_flag_get`, `event_flag_set`, `on_event_flag` | Yes (`src/plugin_game.c`). See below. |
 | `player_stat_get`, `player_stat_set` | Yes, by bbhost's names: `hp`, `max_hp`, `stamina`, `max_stamina`, `vitality`, `endurance`, `strength`, `skill`, `bloodtinge`, `arcane`, `insight`, `level`, `echoes`, plus the save's counters `ng_cycle`, `coop_helps`, `invader_kills`, `true_deaths`, `deaths`, `play_time_ms`. At the title the record already exists and reads 0s, as on bbhost. `set` works from the main thread only. |
+| `param_row`, `param_get`, `param_set`, `param_ids` | Yes (`src/plugin_params.c`). See below. |
 | `player_position`, `player_block` | Yes. They return 1 while the world has no player (the title, a load). |
 | `register_hle` | No: this port's system functions are its own runtime. Returns 1 and logs it. |
 | `visitor` | Always 0: this host never loads a plugin as a visitor. |
@@ -157,6 +158,26 @@ lines). A plugin's own `log()` lines start `Plugin <name>:`.
     with another length (bbhost asks for at least 14) can't share it: whichever comes second
     gets 2. Hook the setter yourself, or use `on_event_flag`, not both.
 
+**Params** (the game's data tables: weapons, armour, enemies, effects, bullets, ...):
+- **Tables:** named as the game names them: `EquipParamWeapon`, `EquipParamProtector`,
+  `NpcParam`, `SpEffectParam`, `Bullet`, `CharaInitParam`, `Magic`, and so on.
+- **Rows:** `param_row` gives a row's address and size, and `param_ids` lists the row ids in
+  order.
+- **Fields:** `param_get` and `param_set` use the game's own field names (`weight`,
+  `correctStrength`, `attackBasePhysics`; `name[2]` for an array element).
+  - The names come from the game's PARAMDEF files. `scripts/paramdefs.py` writes them out at
+    each start (`out\paramdefs.txt`), and the log says "Param definitions: 63 of 63".
+  - A definition is used only when its row size equals the live table's row stride. Otherwise
+    its fields are refused and the log says why, so a wrong definition can't write into the
+    wrong bytes.
+- **Values are text:**
+  - integers, checked against the field's range;
+  - `f32` as a number;
+  - bitfields as their value; writing one keeps the other bits of its byte;
+  - fixed strings read as text and can't be written.
+- **Rules:** `param_set` works from the main thread only. A change applies to every later use
+  of the row; characters already built from it may keep their copy (as bbhost notes).
+
 **Careful with two missing functions:** their failure values read as "all clear".
 - `loading_screen()` returns 0, which means "no loading screen".
 - `key_bound()` returns 0, which means "no game action on this key".
@@ -164,8 +185,8 @@ lines). A plugin's own `log()` lines start `Plugin <name>:`.
 A bbhost plugin that waits for `loading_screen() == 0`, or picks keys by `key_bound()`, won't be
 protected by them here until they're provided.
 
-`docs/WORKPLAN.md` in the parent repository gives the order the rest arrives in: params by
-field name next, then characters, SpEffects, messages, the loading screen and warps.
+`docs/WORKPLAN.md` in the parent repository gives the order the rest arrives in: characters,
+SpEffects, messages, the loading screen and warps next.
 
 ## Building a plugin
 
