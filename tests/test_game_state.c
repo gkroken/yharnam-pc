@@ -15,6 +15,7 @@
 #include <string.h>
 #include <windows.h>
 
+#include "bbhost_plugin.h"
 #include "engine_hooks.h"
 #include "plugin_game.h"
 
@@ -49,6 +50,37 @@ static unsigned char *node(unsigned char *left, unsigned char *right, int sentin
 }
 
 typedef void (BB_GUEST_ABI *WriteBit)(void *, uint32_t, uint32_t);
+
+/* The fake ChrIns vtable's +0x3f0 (the game's apply-SpEffect): records how it was called. */
+static uint64_t applied_ins, applied_id, applied_source;
+static float applied_scale;
+static BB_GUEST_ABI void fake_apply(uint64_t ins, uint64_t id, uint64_t source, uint64_t a3, uint64_t a4, uint64_t a5,
+                                    float scale) {
+    (void)a3, (void)a4, (void)a5;
+    applied_ins = ins;
+    applied_id = id;
+    applied_source = source;
+    applied_scale = scale;
+}
+
+/* A ChrIns: vtable, handle; modules (+0x3b0) with data (+0x20: hp, max hp, the model wstring)
+ * and physics (+0x68: position). */
+static unsigned char *chr_ins(unsigned char *vtable, uint32_t handle, int32_t hp, const char *model, float x) {
+    unsigned char *c = calloc(1, 0x400), *modules = calloc(1, 0x100), *data = calloc(1, 0x200), *phys = calloc(1, 0x200);
+    put64(c, (uint64_t)(uintptr_t)vtable);
+    put32(c + 0x08, handle);
+    put64(c + 0x3b0, (uint64_t)(uintptr_t)modules);
+    put64(modules + 0x20, (uint64_t)(uintptr_t)data);
+    put64(modules + 0x68, (uint64_t)(uintptr_t)phys);
+    put32(data + 0xf8, (uint32_t)hp);
+    put32(data + 0xfc, 1000);
+    const size_t len = strlen(model);
+    for (size_t i = 0; i < len; ++i) data[0x158 + 2 * i] = (unsigned char)model[i];  /* inline, capacity 7 */
+    put64(data + 0x168, len);
+    put64(data + 0x170, 7);
+    putf(phys + 0x1e0, x);
+    return c;
+}
 
 int main(void) {
     unsigned char *image = VirtualAlloc(NULL, IMAGE_SIZE, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
@@ -164,6 +196,62 @@ int main(void) {
     CHECK(bb_game_player_block(&block) == 1);   /* between maps */
     putf(transform + 0x1e4, 0.0f / 0.0f);
     CHECK(bb_game_player_position(xyz, &yaw) == 1);  /* NaN: not a placed player */
+
+    /* Characters: the main player (wcm+0x60, from above) and two sets at +0x850: an NPC in both
+     * (listed once), an empty slot, the player again (skipped). */
+    unsigned char *player_vt = calloc(1, 0x400), *npc_vt = calloc(1, 0x400);
+    put64(player_vt + 0x3f0, (uint64_t)(uintptr_t)fake_apply);
+    put64(npc_vt + 0x3f0, (uint64_t)(uintptr_t)fake_apply);
+    put64(chr, (uint64_t)(uintptr_t)player_vt);
+    unsigned char *npc = chr_ins(npc_vt, 0x10000123, 250, "c2560", 7.5f);
+    unsigned char *npc_ref = calloc(1, 16);
+    put32(npc_ref, 256000);
+    put64(npc + 0x3c8, (uint64_t)(uintptr_t)npc_ref);
+    unsigned char *set1 = calloc(1, 16), *set2 = calloc(1, 16), *entries1 = calloc(3, 0x38), *entries2 = calloc(2, 0x38);
+    put32(set1, 3);
+    put64(set1 + 8, (uint64_t)(uintptr_t)entries1);
+    put64(entries1 + 0x38, (uint64_t)(uintptr_t)npc);
+    put64(entries1 + 0x70, (uint64_t)(uintptr_t)chr);
+    put32(set2, 2);
+    put64(set2 + 8, (uint64_t)(uintptr_t)entries2);
+    put64(entries2, (uint64_t)(uintptr_t)npc);
+    put64(wcm + 0x850 + 8 * 2, (uint64_t)(uintptr_t)set1);
+    put64(wcm + 0x850 + 8 * 9, (uint64_t)(uintptr_t)set2);
+    BbChr list[8];
+    size_t n_chr = 0;
+    CHECK(bb_game_chr_list(list, 8, &n_chr) == 0 && n_chr == 2);
+    CHECK(list[0].ins == chr && list[0].is_player == 1 && list[0].npc_param == -1);
+    CHECK(list[1].ins == npc && list[1].is_player == 0 && list[1].npc_param == 256000);
+    CHECK(list[1].handle == 0x10000123 && list[1].hp == 250 && list[1].max_hp == 1000 && list[1].model == 2560);
+    CHECK(list[1].pos[0] == 7.5f);
+    CHECK(bb_game_chr_list(NULL, 0, &n_chr) == 0 && n_chr == 2);   /* count only */
+    CHECK(bb_game_chr_list(list, 1, &n_chr) == 0 && n_chr == 2);   /* one written, count still 2 */
+
+    /* SpEffects: has, through the list at +0x1c8 (first node +0x08; id +0x40, next +0x58). */
+    unsigned char *list_head = calloc(1, 16), *node1 = calloc(1, 0x60), *node2 = calloc(1, 0x60);
+    put64(npc + 0x1c8, (uint64_t)(uintptr_t)list_head);
+    put64(list_head + 8, (uint64_t)(uintptr_t)node1);
+    put32(node1 + 0x40, 2200);
+    put64(node1 + 0x58, (uint64_t)(uintptr_t)node2);
+    put32(node2 + 0x40, 3010);
+    CHECK(bb_game_sp_effect_has(npc, 3010) == 1 && bb_game_sp_effect_has(npc, 2200) == 1);
+    CHECK(bb_game_sp_effect_has(npc, 1234) == 0);
+    CHECK(bb_game_sp_effect_has(NULL, 2200) == 0);                 /* the player has no list */
+    unsigned char *stranger = chr_ins(npc_vt, 1, 1, "c1000", 0);
+    put64(stranger + 0x1c8, (uint64_t)(uintptr_t)list_head);
+    CHECK(bb_game_sp_effect_has(stranger, 2200) == 0);             /* not in the world: not looked at */
+
+    /* Apply: the vtable's +0x3f0, target = source, 1.0 in xmm0. */
+    CHECK(bb_game_chr_valid(NULL) && bb_game_chr_valid(npc) && !bb_game_chr_valid(stranger));
+    CHECK(bb_game_sp_effect_apply(npc, 2200) == 0);
+    CHECK(applied_ins == (uint64_t)(uintptr_t)npc && applied_id == 2200 && applied_source == applied_ins);
+    CHECK(applied_scale == 1.0f);
+    CHECK(bb_game_sp_effect_apply(NULL, 3010) == 0 && applied_ins == (uint64_t)(uintptr_t)chr && applied_id == 3010);
+    applied_id = 0;
+    CHECK(bb_game_sp_effect_apply(stranger, 2200) == 1 && applied_id == 0);  /* never called */
+    put64(wcm + 0x60, 0);                                           /* no world */
+    CHECK(bb_game_chr_list(list, 8, &n_chr) == 1 && n_chr == 0);
+    CHECK(bb_game_sp_effect_apply(NULL, 2200) == 1);
 
     printf("game state: %d checks passed\n", checks);
     return 0;

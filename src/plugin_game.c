@@ -240,6 +240,160 @@ int bb_game_player_block(uint32_t *block) {
     return 0;
 }
 
+/* --- characters and SpEffects --------------------------------------------------------------------- */
+
+static uint64_t rp(uint64_t at) {
+    uint64_t v = 0;
+    return rd(at, &v, 8) ? v : 0;
+}
+
+/* One character's numbers (bbhost's fill_chr, src/host/plugins.cpp): handle +0x08, chr type
+ * +0x78, team +0x88; an NPC's NpcParam id behind +0x3c8; from the modules (+0x3b0): data +0x20
+ * (hp +0xf8, max hp +0xfc, the model's "c2560" wstring at +0x158, length +0x168, capacity
+ * +0x170) and physics +0x68 (position +0x1e0). */
+static int fill_chr(uint64_t ins, uint64_t player_vtable, BbChr *c) {
+    uint64_t vt = 0;
+    if (!rd(ins, &vt, 8) || !vt) return 0;
+    memset(c, 0, sizeof *c);
+    c->ins = (void *)(uintptr_t)ins;
+    rd(ins + 0x08, &c->handle, 4);
+    rd(ins + 0x78, &c->chr_type, 4);
+    rd(ins + 0x88, &c->team_type, 4);
+    c->npc_param = -1;
+    if (vt != player_vtable) {
+        const uint64_t ref = rp(ins + 0x3c8);
+        int32_t id = -1;
+        if (ref && rd(ref, &id, 4)) c->npc_param = id;
+    }
+    const uint64_t modules = rp(ins + 0x3b0);
+    const uint64_t data = modules ? rp(modules + 0x20) : 0, phys = modules ? rp(modules + 0x68) : 0;
+    if (data) {
+        rd(data + 0xf8, &c->hp, 4);
+        rd(data + 0xfc, &c->max_hp, 4);
+        uint16_t w[16] = {0};
+        uint64_t len = 0, cap = 0;
+        if (rd(data + 0x168, &len, 8) && rd(data + 0x170, &cap, 8) && len && len <= 16 &&
+            rd(cap <= 7 ? data + 0x158 : rp(data + 0x158), w, (size_t)len * 2) && w[0] == 'c') {
+            for (uint64_t i = 1; i < len && w[i] >= '0' && w[i] <= '9'; ++i) c->model = c->model * 10 + (uint32_t)(w[i] - '0');
+        }
+    }
+    if (phys) rd(phys + 0x1e0, c->pos, 12);
+    return 1;
+}
+
+enum { MAX_SEEN = 4096 };
+
+/* Calls each character once (the main player first): fn returns nonzero to stop. */
+static int each_chr(int (*fn)(uint64_t ins, int is_main, void *user), void *user) {
+    const uint64_t man = bn_slot(WORLD_CHR_MAN);
+    const uint64_t main = man ? rp(man + 0x60) : 0;
+    if (!main) return 1;
+    static uint64_t seen[MAX_SEEN];  /* main thread, or a reader racing the world anyway */
+    size_t nseen = 0;
+    seen[nseen++] = main;
+    if (fn(main, 1, user)) return 0;
+    /* The handle-indexed sets (WorldChrMan+0x850, 0x3e ChrSet pointers): capacity +0x00,
+     * entries +0x08, 0x38 bytes apart. */
+    for (int i = 0; i < 0x3e; ++i) {
+        const uint64_t set = rp(man + 0x850 + 8u * (unsigned)i);
+        uint32_t cap = 0;
+        const uint64_t entries = set ? rp(set + 0x08) : 0;
+        if (!entries || !rd(set, &cap, 4) || cap > 4096) continue;
+        for (uint32_t k = 0; k < cap; ++k) {
+            const uint64_t ins = rp(entries + 0x38u * k);
+            if (!ins) continue;
+            int dup = 0;
+            for (size_t s = 0; s < nseen && !dup; ++s) dup = seen[s] == ins;
+            if (dup || nseen == MAX_SEEN) continue;
+            seen[nseen++] = ins;
+            if (fn(ins, 0, user)) return 0;
+        }
+    }
+    return 0;
+}
+
+typedef struct {
+    BbChr *out;
+    size_t max, n;
+    uint64_t player_vtable;
+} ListCtx;
+
+static int list_one(uint64_t ins, int is_main, void *user) {
+    ListCtx *l = user;
+    BbChr c;
+    if (!fill_chr(ins, l->player_vtable, &c)) return 0;
+    c.is_player = is_main;
+    if (l->out && l->n < l->max) l->out[l->n] = c;
+    ++l->n;
+    return 0;
+}
+
+int bb_game_chr_list(BbChr *out, size_t max, size_t *count) {
+    const uint64_t man = bn_slot(WORLD_CHR_MAN);
+    const uint64_t main = man ? rp(man + 0x60) : 0;
+    ListCtx l = {out, max, 0, main ? rp(main) : 0};
+    if (count) *count = 0;
+    if (!main || each_chr(list_one, &l)) return 1;
+    if (count) *count = l.n;
+    return 0;
+}
+
+typedef struct {
+    uint64_t want;
+    int found;
+} FindCtx;
+
+static int find_one(uint64_t ins, int is_main, void *user) {
+    (void)is_main;
+    FindCtx *f = user;
+    f->found = ins == f->want;
+    return f->found;
+}
+
+static uint64_t chr_or_player(void *chr) {
+    const uint64_t man = bn_slot(WORLD_CHR_MAN);
+    const uint64_t main = man ? rp(man + 0x60) : 0;
+    return chr ? (uint64_t)(uintptr_t)chr : main;
+}
+
+int bb_game_chr_valid(void *chr) {
+    const uint64_t ins = chr_or_player(chr);
+    FindCtx f = {ins, 0};
+    return ins && !each_chr(find_one, &f) && f.found;
+}
+
+int bb_game_sp_effect_apply(void *chr, int32_t id) {
+    if (!bb_game_chr_valid(chr)) return 1;
+    const uint64_t ins = chr_or_player(chr);
+    const uint64_t vt = rp(ins);
+    const uint64_t fn = vt ? rp(vt + 0x3f0) : 0;
+    if (!fn) return 1;
+    /* As Lua_MultiDoping (BN 0x178bc70) calls it: target, effect, source = the target, then
+     * zeros; five 1.0 multipliers in xmm0-4; a zero on the stack (bbhost's api_sp_effect_apply). */
+    BbCallRegs r;
+    memset(&r, 0, sizeof r);
+    r.arg[0] = ins;
+    r.arg[1] = (uint32_t)id;
+    r.arg[2] = ins;
+    for (int i = 0; i < 5; ++i) r.xmm[i] = 0x3f800000u;
+    bb_plugin_call((void *)(uintptr_t)fn, &r);
+    return 0;
+}
+
+int bb_game_sp_effect_has(void *chr, int32_t id) {
+    const uint64_t ins = chr_or_player(chr);
+    if (!ins || (chr && !bb_game_chr_valid(chr))) return 0;
+    /* The SpEffect list (ChrIns+0x1c8): its first node at +0x08; a node's id +0x40, next +0x58. */
+    const uint64_t list = rp(ins + 0x1c8);
+    uint64_t node = list ? rp(list + 0x08) : 0;
+    for (int guard = 0; node && guard < 1024; ++guard) {
+        int32_t have = 0;
+        if (rd(node + 0x40, &have, 4) && have == id) return 1;
+        node = rp(node + 0x58);
+    }
+    return 0;
+}
+
 void bb_game_reset(void) {
     AcquireSRWLockExclusive(&g_queue_lock);
     g_head = g_count = 0;

@@ -65,6 +65,7 @@ lines). A plugin's own `log()` lines start `Plugin <name>:`.
 | `event_flag_get`, `event_flag_set`, `on_event_flag` | Yes (`src/plugin_game.c`). See below. |
 | `player_stat_get`, `player_stat_set` | Yes, by bbhost's names: `hp`, `max_hp`, `stamina`, `max_stamina`, `vitality`, `endurance`, `strength`, `skill`, `bloodtinge`, `arcane`, `insight`, `level`, `echoes`, plus the save's counters `ng_cycle`, `coop_helps`, `invader_kills`, `true_deaths`, `deaths`, `play_time_ms`. At the title the record already exists and reads 0s, as on bbhost. `set` works from the main thread only. |
 | `param_row`, `param_get`, `param_set`, `param_ids` | Yes (`src/plugin_params.c`). See below. |
+| `chr_list`, `sp_effect_has`, `sp_effect_apply` | Yes. See below. |
 | `player_position`, `player_block` | Yes. They return 1 while the world has no player (the title, a load). |
 | `register_hle` | No: this port's system functions are its own runtime. Returns 1 and logs it. |
 | `visitor` | Always 0: this host never loads a plugin as a visitor. |
@@ -178,6 +179,23 @@ lines). A plugin's own `log()` lines start `Plugin <name>:`.
 - **Rules:** `param_set` works from the main thread only. A change applies to every later use
   of the row; characters already built from it may keep their copy (as bbhost notes).
 
+**Characters and SpEffects:**
+- **`chr_list`:** the characters the world holds, the main player first (`is_player` 1), then
+  everyone in the game's handle-indexed character sets, each once.
+  - Each `BbChr` gives its handle, NpcParam id (-1 for a player), type, team, HP, position and
+    model number (2560 for c2560).
+  - The `ins` pointers are good until the world changes, so use them within the frame.
+  - Fault-safe reads, so any thread works; a list made off the main thread may be mid-change.
+- **`sp_effect_has`:** whether an effect is on a character now.
+- **`sp_effect_apply`:** puts an effect on a character (`NULL` is the main player), the way the
+  game's scripts do.
+  - Main thread, once the game runs.
+  - Refused (1) unless the id is a row of SpEffectParam, and unless the character is one
+    `chr_list` returns this moment. A stale pointer never reaches the game's code.
+
+One limit, for tables of a single row: there's no row stride to compare, so the size check
+above can't run, and the game's definition is used as it is.
+
 **Careful with two missing functions:** their failure values read as "all clear".
 - `loading_screen()` returns 0, which means "no loading screen".
 - `key_bound()` returns 0, which means "no game action on this key".
@@ -185,8 +203,8 @@ lines). A plugin's own `log()` lines start `Plugin <name>:`.
 A bbhost plugin that waits for `loading_screen() == 0`, or picks keys by `key_bound()`, won't be
 protected by them here until they're provided.
 
-`docs/WORKPLAN.md` in the parent repository gives the order the rest arrives in: characters,
-SpEffects, messages, the loading screen and warps next.
+`docs/WORKPLAN.md` in the parent repository gives the order the rest arrives in: messages,
+the loading screen and warps next.
 
 ## Building a plugin
 

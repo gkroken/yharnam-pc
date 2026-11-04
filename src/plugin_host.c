@@ -518,6 +518,29 @@ static int api_param_ids(const char *table, uint32_t *ids, size_t max, size_t *c
     return bb_param_ids(table, ids, max, count);
 }
 
+/* --- characters and SpEffects (plugin_game.c) ------------------------------------------------- */
+
+static int api_chr_list(BbChr *out, size_t max, size_t *count) {
+    if (count) *count = 0;
+    if (g_phase < PHASE_IMAGE || !eboot_is_109()) return 1;
+    return bb_game_chr_list(out, max, count);
+}
+
+static int api_sp_effect_apply(void *chr, int32_t sp_effect) {
+    if (g_phase != PHASE_RUNNING || !eboot_is_109() || !on_main_thread("sp_effect_apply")) return 1;
+    /* A row the game has: its code dereferences the row it looks up for the id. */
+    if (!bb_param_row("SpEffectParam", (uint32_t)sp_effect, NULL)) {
+        api_log("sp_effect_apply(%d): no such SpEffectParam row", sp_effect);
+        return 1;
+    }
+    return bb_game_sp_effect_apply(chr, sp_effect);
+}
+
+static int api_sp_effect_has(void *chr, int32_t sp_effect) {
+    if (g_phase < PHASE_IMAGE || !eboot_is_109()) return 0;
+    return bb_game_sp_effect_has(chr, sp_effect);
+}
+
 static uint64_t api_symbol(const char *name) {
     (void)name;
     missing("symbol");
@@ -527,22 +550,6 @@ static int api_on_world_load(void (*fn)(uint32_t, void *), void *user) {
     (void)fn, (void)user;
     missing("on_world_load");
     return 1;
-}
-static int api_chr_list(BbChr *out, size_t max, size_t *count) {
-    (void)out, (void)max;
-    if (count) *count = 0;
-    missing("chr_list");
-    return 1;
-}
-static int api_sp_effect_apply(void *chr, int32_t sp_effect) {
-    (void)chr, (void)sp_effect;
-    missing("sp_effect_apply");
-    return 1;
-}
-static int api_sp_effect_has(void *chr, int32_t sp_effect) {
-    (void)chr, (void)sp_effect;
-    missing("sp_effect_has");
-    return 0;
 }
 static int api_show_message(const char *text, float seconds) {
     (void)text, (void)seconds;
