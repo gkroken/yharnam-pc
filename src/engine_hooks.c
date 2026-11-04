@@ -37,6 +37,23 @@ size_t bb_image_size(void) { return g_image ? g_image_size : 0; }
 
 int bb_hooks_sealed(void) { return g_sealed; }
 
+enum { MAX_CODE_RANGES = 8 };
+static uint64_t g_code[MAX_CODE_RANGES][2];
+static int g_code_count;
+
+void bb_image_code(uint64_t offset, uint64_t size) {
+    if (g_code_count < MAX_CODE_RANGES) {
+        g_code[g_code_count][0] = offset;
+        g_code[g_code_count++][1] = size;
+    }
+}
+
+int bb_image_is_code(uint64_t offset, size_t n) {
+    for (int i = 0; i < g_code_count; ++i)
+        if (offset < g_code[i][0] + g_code[i][1] && g_code[i][0] < offset + n) return 1;
+    return 0;
+}
+
 static int reachable(const unsigned char *from, const unsigned char *to) {
     const int64_t distance = (int64_t)((uintptr_t)to - (uintptr_t)from);
     return distance > -(int64_t)REACH && distance < (int64_t)REACH;

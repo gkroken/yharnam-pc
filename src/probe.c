@@ -736,6 +736,8 @@ int main(int argc, char **argv) {
         else if (bb_hooks_init(image, (size_t)size))
             printf("Engine hooks: unavailable (%s)\n", bb_hooks_error());
         else {
+            for (uint64_t i = 0; i < ns; ++i)  /* plugin_host.c: write() keeps out of code */
+                if (segments[i].flags & 1) bb_image_code(segments[i].address, segments[i].size);
             printf("Engine hooks: %d installed\n", bb_engine_install());
             bbgpu_set_frame_callback(bb_engine_frame);
         }

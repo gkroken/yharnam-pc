@@ -38,6 +38,11 @@ void *bb_guest(uint64_t offset);
 size_t bb_image_size(void);
 /* Whether bb_hooks_seal has run: no hooks can be added after it. */
 int bb_hooks_sealed(void);
+/* The image's executable segments, as the loader maps them (probe.c, before bb_engine_install):
+ * the plugin host's write() keeps out of code, whatever the pages' protection is at the time. */
+void bb_image_code(uint64_t offset, uint64_t size);
+/* Whether any of the n bytes at an image offset lie in an executable segment. */
+int bb_image_is_code(uint64_t offset, size_t n);
 
 /* `at` holds `call rel32` (E8) or `jmp rel32` (E9) to `target`: sends it to `host` instead.
  * `host` has the callee's signature; it may call the original through bb_guest(target).

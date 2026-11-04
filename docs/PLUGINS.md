@@ -58,11 +58,29 @@ lines). A plugin's own `log()` lines start `Plugin <name>:`.
 |---|---|
 | `log`, `config`, `data_dir`, `mods_dir`, `plugin_dir` | Yes. `config` reads `plugins.ini`, and answers `host.name` with `yharnam-pc`, so a plugin can tell where it runs. |
 | `eboot_is_109`, `eboot_sha256` | Yes. "1.09" is the test the community patches use: the code at every patch site matches. The SHA-256 is of the port's `eboot.elf`. That isn't the same file bbhost hashes, so it differs from bbhost's 1.09 digest; compare with `eboot_is_109()`, not the digest. |
-| `guest_addr`, `read`, `write`, `patch` | Yes. `read` and `write` take a Binary Ninja address inside the image, or a runtime address: the game runs natively here, so its pointers are the process's own. `write` refuses memory that isn't writable. `patch` checks the expected bytes, then writes. |
+| `guest_addr`, `read`, `write`, `patch` | Yes. See the notes below the table. |
 | `on_frame` | Yes. On the game's main thread, once a frame, right after its frame-time manager's update. |
 | `register_hle` | No: this port's system functions are its own runtime. Returns 1 and logs it. |
 | `visitor` | Always 0: this host never loads a plugin as a visitor. |
 | Everything else | Not yet. Each returns the failure value its comment in the header gives (1, 0, NULL or -1) and logs once that it is missing. |
+
+**Memory functions:**
+- **Addresses:** `read` and `write` take a Binary Ninja address inside the image, or a runtime
+  address. The game runs natively here, so its pointers are the process's own. Any address
+  outside the image is used as it is, unlike bbhost, which accepts only memory the game mapped.
+  `read` of an unmapped address returns 1. `write` returns 0 for any writable memory, the host's
+  included, so check addresses before writing.
+- **`write` never changes code:** it refuses any address in the image's executable segments, in
+  every phase. This holds even during `bb_plugin_image`, when the whole image is still writable,
+  and in co-op, where code stays writable. Code goes through `patch`, which checks the expected
+  bytes first. `patch` returns 0 when the new bytes are already there, as on bbhost.
+
+**Careful with two missing functions:** their failure values read as "all clear".
+- `loading_screen()` returns 0, which means "no loading screen".
+- `key_bound()` returns 0, which means "no game action on this key".
+
+A bbhost plugin that waits for `loading_screen() == 0`, or picks keys by `key_bound()`, won't be
+protected by them here until they're provided.
 
 `docs/WORKPLAN.md` in the parent repository gives the order the rest arrives in: hooks and
 `call_guest` first, then event flags, params, the player and characters.

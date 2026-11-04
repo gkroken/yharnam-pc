@@ -360,7 +360,7 @@ if (WIN32)
     target_compile_options(plugin-host-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
     target_compile_definitions(plugin-host-test PRIVATE WIN32_LEAN_AND_MEAN
         PLUGIN_DIR_A="${BB_TEST_PLUGINS_A}" PLUGIN_DIR_B="${BB_TEST_PLUGINS_B}")
-    foreach(variant IN ITEMS 1:good:a 2:good:b 3:fails:a 4:initfail:a 5:notplugin:a 6:future:a 7:optin:a 8:gameplay:a)
+    foreach(variant IN ITEMS 1:good:a 2:good:b 3:fails:a 4:initfail:a 5:notplugin:a 6:future:a 7:optin:a 8:gameplay:a 9:badname:a 10:zdup:a)
         string(REPLACE ":" ";" parts ${variant})
         list(GET parts 0 number)
         list(GET parts 1 name)

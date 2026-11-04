@@ -78,6 +78,7 @@ int main(void) {
     set_env("BB_GPU_USER_DIR", user);
     set_env("BB_PLUGIN_DIRS", PLUGIN_DIR_A ";" PLUGIN_DIR_B);
     set_env("BB_EBOOT_109", "1");
+    set_env("BB_EBOOT_SHA256", "00ff00ff");
     set_env("BB_ONLINE", "");
     set_env("BB_PLUGINS", "");
 
@@ -85,11 +86,16 @@ int main(void) {
     assert(image);
     memset(image, 0x90, IMAGE_SIZE);
     CHECK(bb_hooks_init(image, IMAGE_SIZE) == 0);
+    bb_image_code(0, 0x8000);  /* the fake image's "text segment" */
 
     /* 1. Everything in its default state. */
     write_ini(user, "");
-    CHECK(bb_plugins_install() == 2);  /* good (from folder B) and gameplay */
-    CHECK(variant_of("good.dll") == 2);  /* the later folder's file replaced the earlier's */
+    CHECK(bb_plugins_install() == 2);  /* good_b (folder B's good.dll) and gameplay */
+    /* The later folder's file replaced the earlier's: variant 1 calls itself "good", so had both
+     * loaded the count would be 3. */
+    CHECK(variant_of("good.dll") == 2);
+    CHECK(!loaded("badname.dll"));    /* an invalid name */
+    CHECK(!loaded("zdup.dll"));       /* "gameplay" twice: the later file is left out */
     CHECK(loaded("gameplay.dll"));
     CHECK(!loaded("fails.dll"));      /* failed its image phase: unloaded */
     CHECK(!loaded("initfail.dll"));   /* failed its init phase: unloaded */
@@ -101,6 +107,7 @@ int main(void) {
     CHECK(r);
     CHECK(r[0] == BB_PLUGIN_API_VERSION && r[1] == (long long)sizeof(BbHostApi));
     CHECK(r[2] == 0);                                            /* guest_addr refused in init */
+    CHECK(r[40] == 1 && r[41] == 1 && r[42] == 1 && r[43] == 1 && r[44] == 0); /* and the rest */
     CHECK(r[3] == 1);                                            /* eboot_is_109 */
     CHECK(r[4] == 0);                                            /* on_frame */
     CHECK(r[5] == (long long)(uintptr_t)(image + 0x10));         /* guest_addr in the image */
@@ -113,9 +120,12 @@ int main(void) {
     CHECK(r[16] == 1 && r[17] == 0);                             /* missing: event_flag_get */
     CHECK(r[18] == 1 && r[19] == 0);                             /* missing: param_row */
     CHECK(r[20] == 2 && r[21] == -1 && r[22] == 1 && r[23] == 0); /* hook, replace_text, hle, symbol */
-    CHECK(r[24] == 1 && r[25] == 1 && r[26] == 1);               /* plugin_dir, host.name, no escape */
+    CHECK(r[24] == 1 && r[25] == 1 && r[26] == 1 && r[27] == 1); /* plugin_dir, host.name, no escape */
+    CHECK(r[28] == 1 && r[29] == 0 && r[31] == 1 && r[32] == 1); /* write: code refused, data written */
+    CHECK(r[30] == 0);                                           /* patch: already patched is done */
+    CHECK(r[33] == 1);                                           /* eboot_sha256 from the image phase */
     char dir[MAX_PATH];
-    snprintf(dir, sizeof dir, "%s\\plugins\\good", user);
+    snprintf(dir, sizeof dir, "%s\\plugins\\good_b", user);
     CHECK(GetFileAttributesA(dir) & FILE_ATTRIBUTE_DIRECTORY && GetFileAttributesA(dir) != INVALID_FILE_ATTRIBUTES);
 
     /* Every pointer in the table is set, so no plugin can call a null one. */
@@ -149,7 +159,8 @@ int main(void) {
     set_env("BB_COOP", "");
 
     /* 3. plugins.ini: an opt-in plugin turned on with its option, a plugin turned off. */
-    write_ini(user, "\xef\xbb\xbf# comment\r\n[plugins]\r\ngood = 0\r\noptin=true\r\n\r\n[optin]\r\ncolor = red\r\n");
+    /* A BOM straight before the section, as editors that save one write it. */
+    write_ini(user, "\xef\xbb\xbf[plugins]\r\n# comment\r\ngood_b = 0\r\noptin=true\r\n\r\n[optin]\r\ncolor = red\r\n");
     CHECK(bb_plugins_install() == 2);  /* optin and gameplay */
     CHECK(!loaded("good.dll") && loaded("optin.dll"));
     const char *(*option)(void) = (const char *(*)(void))export_of("optin.dll", "test_option");

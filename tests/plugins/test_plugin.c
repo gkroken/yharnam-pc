@@ -7,7 +7,11 @@
  *   5 notplugin  exports neither entry point
  *   6 future     built for API 99
  *   7 optin      BB_PLUGIN_OPT_IN: reads its option from plugins.ini
- *   8 gameplay   BB_PLUGIN_GAMEPLAY: left out of online play */
+ *   8 gameplay   BB_PLUGIN_GAMEPLAY: left out of online play
+ *   9 badname    an invalid info->name
+ *  10 zdup       another file whose info->name is "gameplay": left out as a duplicate
+ * Variant 2 calls itself "good_b", so only the folders' override, not the duplicate-name rule,
+ * can explain that it loads instead of variant 1. */
 #include "bbhost_plugin.h"
 
 #include <stdio.h>
@@ -39,8 +43,10 @@ static void on_frame(void *user) {
     ++g_frames;
 }
 
-#if VARIANT == 1 || VARIANT == 2
+#if VARIANT == 1
 #define NAME "good"
+#elif VARIANT == 2
+#define NAME "good_b"
 #elif VARIANT == 3
 #define NAME "fails"
 #elif VARIANT == 4
@@ -49,13 +55,15 @@ static void on_frame(void *user) {
 #define NAME "future"
 #elif VARIANT == 7
 #define NAME "optin"
+#elif VARIANT == 9
+#define NAME "bad name!"
 #else
 #define NAME "gameplay"
 #endif
 
 BB_PLUGIN_EXPORT const BbPluginInfo bb_plugin_info = {
     VARIANT == 6 ? 99u : BB_PLUGIN_API_VERSION,
-    VARIANT == 7 ? BB_PLUGIN_OPT_IN : VARIANT == 8 ? BB_PLUGIN_GAMEPLAY : 0u,
+    VARIANT == 7 ? BB_PLUGIN_OPT_IN : VARIANT == 8 || VARIANT == 10 ? BB_PLUGIN_GAMEPLAY : 0u,
     NAME, "Test " NAME, "1.2.3", "tests", "A plugin for tests/test_plugin_host.c."};
 
 BB_PLUGIN_EXPORT int bb_plugin_init(const BbHostApi *api) {
@@ -64,6 +72,15 @@ BB_PLUGIN_EXPORT int bb_plugin_init(const BbHostApi *api) {
     g_results[1] = api->size;
     /* Image functions refuse before the image phase. */
     g_results[2] = (long long)api->guest_addr(0x400010);
+    /* ...and so do the other image functions, though this host's image exists already. */
+    static const unsigned char nop2[2] = {0x90, 0x90}, int3[2] = {0xcc, 0xcc};
+    unsigned char got[2] = {0};
+    static int cell;
+    g_results[40] = api->patch(0x400010, nop2, int3, 2);
+    g_results[41] = api->read(0x400010, got, 2);
+    g_results[42] = api->write((uint64_t)(uintptr_t)&cell, nop2, 1);
+    g_results[43] = api->eboot_sha256()[0] == 0;
+    g_results[44] = api->eboot_is_109();
     api->log("init of variant %d", VARIANT);
     return VARIANT == 4 ? 3 : 0;
 }
@@ -109,6 +126,14 @@ BB_PLUGIN_EXPORT int bb_plugin_image(const BbHostApi *api) {
     g_results[24] = api->plugin_dir(NAME)[0] != 0;
     g_results[25] = strcmp(api->config("host.name"), "yharnam-pc") == 0;
     g_results[26] = api->plugin_dir("../escape")[0] == 0;
+    g_results[27] = api->plugin_dir("..")[0] == 0;
+    /* The test marks the image's first 0x8000 bytes as code (bb_image_code). */
+    g_results[28] = api->write(0x400020, &value, sizeof value);           /* 1: code */
+    g_results[29] = api->write(0x400000 + 0x9000, &value, sizeof value);  /* 0: data */
+    g_results[30] = api->patch(0x400010, nops, traps, 2);                 /* 0: already patched */
+    g_results[31] = api->write(api->guest_addr(0x400020), &value, sizeof value); /* 1: code, by runtime address */
+    g_results[32] = api->write(0x400000 + 0x7ffe, &value, sizeof value);  /* 1: straddles code and data */
+    g_results[33] = strcmp(api->eboot_sha256(), "00ff00ff") == 0;
 #endif
     return 0;
 }

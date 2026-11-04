@@ -280,6 +280,13 @@ static int api_write(uint64_t address, const void *data, size_t n) {
     if (g_phase < PHASE_IMAGE || !data || !address) return 1;
     if (!n) return 0;
     unsigned char *at = resolve(address, n);
+    /* Code is patch()'s, which checks what it replaces. During bb_plugin_image the whole image is
+     * still writable, and in co-op the code stays writable: the segments decide, not the pages.
+     * Either kind of address can land in the image (a runtime pointer read out of the game too). */
+    const uintptr_t image = (uintptr_t)bb_guest(0), size = bb_image_size(), p = (uintptr_t)at;
+    if (n > UINTPTR_MAX - p) return 1;
+    const uintptr_t lo = p > image ? p : image, hi = p + n < image + size ? p + n : image + size;
+    if (image && lo < hi && bb_image_is_code(lo - image, hi - lo)) return 1;
     if (!writable(at, n)) return 1;
     memcpy(at, data, n);
     return 0;
@@ -289,7 +296,8 @@ static int api_patch(uint64_t bn, const void *expect, const void *bytes, size_t 
     if (g_phase < PHASE_IMAGE || !eboot_is_109() || !expect || !bytes || !n) return 1;
     unsigned char *at = image_at(bn, n);
     if (!at) return 2;
-    if (memcmp(at, expect, n)) return 1;
+    /* As bbhost: already patched is done (a plugin's second start, or two plugins agreeing). */
+    if (memcmp(at, expect, n)) return memcmp(at, bytes, n) ? 1 : 0;
     DWORD old;
     if (!VirtualProtect(at, n, PAGE_EXECUTE_READWRITE, &old)) return 2;
     memcpy(at, bytes, n);
