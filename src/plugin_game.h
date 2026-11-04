@@ -45,11 +45,12 @@ int bb_game_player_position(float xyz[3], float *yaw);
 int bb_game_player_block(uint32_t *block);
 
 /* The characters WorldChrMan holds: the main player first, then each handle-indexed ChrSet's,
- * each once. Up to max into out (may be NULL), the total into *count. 0, or 1 before the world
+ * each once. Main thread only (the dedup list is shared). Up to max into out (may be NULL), the total into *count. 0, or 1 before the world
  * exists. The BbChr pointers stay good until the world changes (next frame, to be safe). */
 struct BbChr;
 int bb_game_chr_list(struct BbChr *out, size_t max, size_t *count);
-/* Whether chr is one of the characters chr_list returns now (NULL: the main player, if any). */
+/* Whether chr is one of the characters chr_list returns now (NULL: the main player, if any).
+ * Any thread: no shared state. */
 int bb_game_chr_valid(void *chr);
 /* Applies a SpEffectParam row to a character (NULL: the main player) as the game's scripts do:
  * its ChrIns vtable's +0x3f0 with the target as its own source and 1.0 multipliers. Main thread.

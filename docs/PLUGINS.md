@@ -185,7 +185,8 @@ lines). A plugin's own `log()` lines start `Plugin <name>:`.
   - Each `BbChr` gives its handle, NpcParam id (-1 for a player), type, team, HP, position and
     model number (2560 for c2560).
   - The `ins` pointers are good until the world changes, so use them within the frame.
-  - Fault-safe reads, so any thread works; a list made off the main thread may be mid-change.
+  - Main thread only (`on_frame`, or a hook running there), as bbhost's header says. Off it,
+    it returns 1. `sp_effect_has` works from any thread.
 - **`sp_effect_has`:** whether an effect is on a character now.
 - **`sp_effect_apply`:** puts an effect on a character (`NULL` is the main player), the way the
   game's scripts do.

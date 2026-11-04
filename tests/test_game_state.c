@@ -51,6 +51,17 @@ static unsigned char *node(unsigned char *left, unsigned char *right, int sentin
 
 typedef void (BB_GUEST_ABI *WriteBit)(void *, uint32_t, uint32_t);
 
+/* port-a87a447-F1: sp_effect_has on another thread while chr_list runs on this one. */
+static volatile LONG race_stop;
+static volatile LONG race_wrong;
+static void *race_npc;
+static DWORD WINAPI race_has(LPVOID unused) {
+    (void)unused;
+    while (!race_stop)
+        if (bb_game_sp_effect_has(race_npc, 2200) != 1) InterlockedIncrement(&race_wrong);
+    return 0;
+}
+
 /* The fake ChrIns vtable's +0x3f0 (the game's apply-SpEffect): records how it was called. */
 static uint64_t applied_ins, applied_id, applied_source;
 static float applied_scale;
@@ -240,6 +251,22 @@ int main(void) {
     unsigned char *stranger = chr_ins(npc_vt, 1, 1, "c1000", 0);
     put64(stranger + 0x1c8, (uint64_t)(uintptr_t)list_head);
     CHECK(bb_game_sp_effect_has(stranger, 2200) == 0);             /* not in the world: not looked at */
+
+    /* Two threads: has on a worker, chr_list here (a smoke test). In a world that holds still
+     * both walks write the same pointers in the same order, so the old shared dedup list could
+     * not be caught here; the fix is structural: has uses no shared state, and chr_list is
+     * main-thread only (flag-delivery-test checks the refusal). */
+    race_npc = npc;
+    HANDLE racer = CreateThread(NULL, 0, race_has, NULL, 0, NULL);
+    int lists_wrong = 0;
+    for (int i = 0; i < 20000; ++i) {
+        size_t c = 0;
+        if (bb_game_chr_list(list, 8, &c) || c != 2 || list[1].ins != npc) ++lists_wrong;
+    }
+    InterlockedExchange(&race_stop, 1);
+    WaitForSingleObject(racer, INFINITE);
+    CloseHandle(racer);
+    CHECK(lists_wrong == 0 && race_wrong == 0);
 
     /* Apply: the vtable's +0x3f0, target = source, 1.0 in xmm0. */
     CHECK(bb_game_chr_valid(NULL) && bb_game_chr_valid(npc) && !bb_game_chr_valid(stranger));

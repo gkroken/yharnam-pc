@@ -283,14 +283,17 @@ static int fill_chr(uint64_t ins, uint64_t player_vtable, BbChr *c) {
 
 enum { MAX_SEEN = 4096 };
 
-/* Calls each character once (the main player first): fn returns nonzero to stop. */
-static int each_chr(int (*fn)(uint64_t ins, int is_main, void *user), void *user) {
+/* Calls each character (the main player first): fn returns nonzero to stop. With `dedup`, each
+ * once: that keeps a list of those seen, which is static (too big for a game thread's stack), so
+ * only the main thread asks for it (chr_list). Without, a character in two sets comes twice:
+ * enough for "is it there", and safe from any thread. port-a87a447-F1. */
+static int each_chr(int (*fn)(uint64_t ins, int is_main, void *user), void *user, int dedup) {
     const uint64_t man = bn_slot(WORLD_CHR_MAN);
     const uint64_t main = man ? rp(man + 0x60) : 0;
     if (!main) return 1;
-    static uint64_t seen[MAX_SEEN];  /* main thread, or a reader racing the world anyway */
+    static uint64_t seen[MAX_SEEN];
     size_t nseen = 0;
-    seen[nseen++] = main;
+    if (dedup) seen[nseen++] = main;
     if (fn(main, 1, user)) return 0;
     /* The handle-indexed sets (WorldChrMan+0x850, 0x3e ChrSet pointers): capacity +0x00,
      * entries +0x08, 0x38 bytes apart. */
@@ -302,10 +305,12 @@ static int each_chr(int (*fn)(uint64_t ins, int is_main, void *user), void *user
         for (uint32_t k = 0; k < cap; ++k) {
             const uint64_t ins = rp(entries + 0x38u * k);
             if (!ins) continue;
-            int dup = 0;
-            for (size_t s = 0; s < nseen && !dup; ++s) dup = seen[s] == ins;
-            if (dup || nseen == MAX_SEEN) continue;
-            seen[nseen++] = ins;
+            if (dedup) {
+                int dup = 0;
+                for (size_t s = 0; s < nseen && !dup; ++s) dup = seen[s] == ins;
+                if (dup || nseen == MAX_SEEN) continue;
+                seen[nseen++] = ins;
+            }
             if (fn(ins, 0, user)) return 0;
         }
     }
@@ -333,7 +338,7 @@ int bb_game_chr_list(BbChr *out, size_t max, size_t *count) {
     const uint64_t main = man ? rp(man + 0x60) : 0;
     ListCtx l = {out, max, 0, main ? rp(main) : 0};
     if (count) *count = 0;
-    if (!main || each_chr(list_one, &l)) return 1;
+    if (!main || each_chr(list_one, &l, 1)) return 1;
     if (count) *count = l.n;
     return 0;
 }
@@ -359,7 +364,7 @@ static uint64_t chr_or_player(void *chr) {
 int bb_game_chr_valid(void *chr) {
     const uint64_t ins = chr_or_player(chr);
     FindCtx f = {ins, 0};
-    return ins && !each_chr(find_one, &f) && f.found;
+    return ins && !each_chr(find_one, &f, 0) && f.found;
 }
 
 int bb_game_sp_effect_apply(void *chr, int32_t id) {

@@ -522,7 +522,7 @@ static int api_param_ids(const char *table, uint32_t *ids, size_t max, size_t *c
 
 static int api_chr_list(BbChr *out, size_t max, size_t *count) {
     if (count) *count = 0;
-    if (g_phase < PHASE_IMAGE || !eboot_is_109()) return 1;
+    if (g_phase < PHASE_IMAGE || !eboot_is_109() || !on_main_thread("chr_list")) return 1;
     return bb_game_chr_list(out, max, count);
 }
 

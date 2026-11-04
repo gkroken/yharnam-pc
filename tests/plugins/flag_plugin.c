@@ -39,6 +39,7 @@ BB_PLUGIN_EXPORT int flag_seen(void) { return g_seen; }
 BB_PLUGIN_EXPORT int flag_set(uint32_t id, int value) { return g_api->event_flag_set(id, value); }
 BB_PLUGIN_EXPORT int stat_set(int64_t value) { return g_api->player_stat_set("echoes", value); }
 BB_PLUGIN_EXPORT int late_register(void) { return g_api->on_event_flag(on_flag, 0); }
+BB_PLUGIN_EXPORT int chr_count(size_t *count) { return g_api->chr_list(0, 0, count); }
 
 BB_PLUGIN_EXPORT const BbPluginInfo bb_plugin_info = {BB_PLUGIN_API_VERSION, 0, NAME, NAME, "1", "tests", "flags"};
 

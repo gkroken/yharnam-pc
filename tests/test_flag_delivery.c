@@ -49,13 +49,17 @@ static void *export_of(const char *dll, const char *name) {
 
 typedef int (*SetFn)(uint32_t, int);
 typedef int (*StatFn)(int64_t);
+typedef int (*ChrFn)(size_t *);
 static SetFn g_set;
 static StatFn g_stat;
-static int g_off_set = -1, g_off_stat = -1;
+static ChrFn g_chr;
+static int g_off_set = -1, g_off_stat = -1, g_off_chr = -1;
 static DWORD WINAPI off_main(LPVOID unused) {
     (void)unused;
+    size_t count = 0;
     g_off_set = g_set(7, 1);
     g_off_stat = g_stat(5);
+    g_off_chr = g_chr(&count);
     return 0;
 }
 
@@ -91,10 +95,14 @@ int main(void) {
     /* The game's setter, with its real prologue (the watcher hooks it), then ret. */
     static const unsigned char setter[] = {0x41, 0x89, 0xd0, 0x8b, 0x4f, 0x1c, 0x31, 0xd2, 0xc3};
     memcpy(AT(0x17cfcc0), setter, sizeof setter);
-    /* A loaded character for player_stat_set. */
+    /* A loaded character for player_stat_set, and a world with a main player for chr_list. */
     unsigned char *gdm = calloc(1, 0x100), *record = calloc(1, 0x100);
     put64(gdm + 8, (uint64_t)(uintptr_t)record);
     put64(AT(0x593b130), (uint64_t)(uintptr_t)gdm);
+    unsigned char *wcm = calloc(1, 0x1000), *player = calloc(1, 0x400), *player_vt = calloc(1, 0x400);
+    put64(player, (uint64_t)(uintptr_t)player_vt);
+    put64(wcm + 0x60, (uint64_t)(uintptr_t)player);
+    put64(AT(0x593e878), (uint64_t)(uintptr_t)wcm);
 
     /* 1. Folder E alone: nobody registers in bb_plugin_image, so nobody watches. */
     set_env("BB_PLUGIN_DIRS", PLUGIN_DIR_E);
@@ -115,13 +123,17 @@ int main(void) {
     int (*seen_off)(void) = (int (*)(void))export_of("force_off.dll", "flag_seen");
     g_set = (SetFn)export_of("force_on.dll", "flag_set");
     g_stat = (StatFn)export_of("force_on.dll", "stat_set");
-    CHECK(seen_on && seen_off && g_set && g_stat);
+    g_chr = (ChrFn)export_of("force_on.dll", "chr_count");
+    CHECK(seen_on && seen_off && g_set && g_stat && g_chr);
 
     /* Off the main thread both sets refuse; on it they work. */
     HANDLE t = CreateThread(NULL, 0, off_main, NULL, 0, NULL);
     WaitForSingleObject(t, INFINITE);
     CloseHandle(t);
     CHECK(g_off_set == 1 && g_off_stat == 1 && bits[0] == 0);
+    CHECK(g_off_chr == 1);                               /* chr_list: main thread only */
+    size_t chr_count = 0;
+    CHECK(g_chr(&chr_count) == 0 && chr_count == 1);      /* on it: the main player */
     uint32_t echoes = 0;
     memcpy(&echoes, record + 0x94, 4);
     CHECK(echoes == 0);
