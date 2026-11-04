@@ -1,12 +1,13 @@
 """Boundary tests for the native loader; uses tiny synthetic x86-64 images."""
 from paths import ROOT
+import os
 from pathlib import Path
 import struct
 import subprocess
 import tempfile
 import unittest
 
-EXE = ROOT / 'out/bb-probe'
+EXE = ROOT / ('out/bb-probe.exe' if os.name == 'nt' else 'out/bb-probe')
 
 
 def package(code, relocs=(), names=(), capabilities=None):
