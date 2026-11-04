@@ -10,6 +10,7 @@
 
 #include "bbhost_plugin.h"
 #include "engine_hooks.h"
+#include "plugin_hooks.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -48,6 +49,7 @@ static SRWLOCK g_lock = SRWLOCK_INIT;
 static enum Phase g_phase;
 static int g_tick_registered;
 static BbHostApi g_api;
+static DWORD g_main_thread;  /* the thread that starts the plugins: the game's main thread here */
 
 /* The plugin whose code is running on this thread (its start, its callback), for log lines
  * and the ownership of what it registers. -1 outside a plugin's call. */
@@ -63,6 +65,12 @@ static void host_log(const char *fmt, ...) {
     va_end(ap);
     printf("Plugins: %s\n", line);
     fflush(stdout);
+}
+
+static int swap_current(int owner) {
+    const int was = t_current;
+    t_current = owner;
+    return was;
 }
 
 static const char *current_name(void) {
@@ -350,11 +358,6 @@ static void missing(const char *function) {
     if (first) api_log("%s is not available in this host yet; it returned the failure value", function);
 }
 
-static int api_hook(uint64_t bn, const void *prologue, size_t n, BbHookFn fn, void *user) {
-    (void)bn, (void)prologue, (void)n, (void)fn, (void)user;
-    missing("hook");
-    return 2;
-}
 static void *api_param_row(const char *table, uint32_t id, size_t *bytes) {
     (void)table, (void)id;
     if (bytes) *bytes = 0;
@@ -429,20 +432,48 @@ static int api_lamp_warp(int32_t return_point) {
     missing("lamp_warp");
     return 1;
 }
+/* hook and hook2: from bb_plugin_image only, while the engine hooks are open. */
+static int place_hook(const char *what, uint64_t bn, const void *prologue, size_t n, BbHookFn fn, BbHookFn2 fn2,
+                      void *user) {
+    if (!eboot_is_109() || !image_at(bn, n ? n : 1)) return 1;
+    if (g_phase != PHASE_IMAGE || bb_hooks_sealed()) {
+        api_log("%s(0x%llx): hooks can be placed only in bb_plugin_image", what, (unsigned long long)bn);
+        return 2;
+    }
+    const int result = bb_plugin_hook(bn - BN_BASE, prologue, n, fn, fn2, user, t_current);
+    if (result) api_log("%s(0x%llx, %zu bytes): %s", what, (unsigned long long)bn, n,
+                        result == 1 ? "not placed: the bytes there are not the prologue given"
+                                    : "not placed: no room, or another hook there with another length");
+    return result;
+}
+
+static int api_hook(uint64_t bn, const void *prologue, size_t n, BbHookFn fn, void *user) {
+    if (!prologue || !fn) return 1;
+    return place_hook("hook", bn, prologue, n, fn, NULL, user);
+}
+
+static int api_hook2(uint64_t bn, const void *prologue, size_t n, BbHookFn2 fn, void *user) {
+    if (!fn) return 1;
+    return place_hook("hook2", bn, prologue, n, NULL, fn, user);
+}
+
+static int api_call_guest(uint64_t bn, BbCallRegs *regs) {
+    if (g_phase < PHASE_IMAGE || !eboot_is_109() || !regs) return 1;
+    unsigned char *at = image_at(bn, 1);
+    if (!at || !bb_image_is_code((uint64_t)(at - (unsigned char *)bb_guest(0)), 1)) return 1;
+    if (GetCurrentThreadId() != g_main_thread) {
+        api_log("call_guest(0x%llx): only from the game's main thread (on_frame, or a hook on it)",
+                (unsigned long long)bn);
+        return 1;
+    }
+    bb_plugin_call(at, regs);
+    return 0;
+}
+
 static uint64_t api_symbol(const char *name) {
     (void)name;
     missing("symbol");
     return 0;
-}
-static int api_call_guest(uint64_t bn, BbCallRegs *regs) {
-    (void)bn, (void)regs;
-    missing("call_guest");
-    return 1;
-}
-static int api_hook2(uint64_t bn, const void *prologue, size_t n, BbHookFn2 fn, void *user) {
-    (void)bn, (void)prologue, (void)n, (void)fn, (void)user;
-    missing("hook2");
-    return 2;
 }
 static int api_param_ids(const char *table, uint32_t *ids, size_t max, size_t *count) {
     (void)table, (void)ids, (void)max;
@@ -674,6 +705,7 @@ static void unload(int index, const char *why) {
         if (g_frames[i].owner != index) g_frames[kept++] = g_frames[i];
     g_frame_count = kept;
     ReleaseSRWLockExclusive(&g_lock);
+    bb_plugin_hooks_drop(index);
     host_log("%s: %s; unloaded", p->name, why);
     FreeLibrary(p->dll);
     p->dll = NULL;
@@ -760,6 +792,8 @@ int bb_plugins_install(void) {
     }
     fill_api();
     ini_load();
+    g_main_thread = GetCurrentThreadId();
+    bb_plugin_hooks_set_current(swap_current);
     Candidate found[MAX_PLUGINS * 2];
     const int n = scan(found, (int)(sizeof found / sizeof *found));
     for (int i = 0; i < n; ++i) load_one(&found[i]);
@@ -805,6 +839,7 @@ void bb_plugins_reset(void) {
         }
     g_count = 0;
     g_frame_count = 0;
+    bb_plugin_hooks_reset();
     g_phase = PHASE_NONE;
     g_ini_count = 0;
 }

@@ -60,6 +60,8 @@ lines). A plugin's own `log()` lines start `Plugin <name>:`.
 | `eboot_is_109`, `eboot_sha256` | Yes. "1.09" is the test the community patches use: the code at every patch site matches. The SHA-256 is of the port's `eboot.elf`. That isn't the same file bbhost hashes, so it differs from bbhost's 1.09 digest; compare with `eboot_is_109()`, not the digest. |
 | `guest_addr`, `read`, `write`, `patch` | Yes. See the notes below the table. |
 | `on_frame` | Yes. On the game's main thread, once a frame, right after its frame-time manager's update. |
+| `hook`, `hook2` | Yes, from `bb_plugin_image` only (see below). |
+| `call_guest` | Yes, from the game's main thread only (`on_frame`, or a hook running there), and only to an address in the image's code. |
 | `register_hle` | No: this port's system functions are its own runtime. Returns 1 and logs it. |
 | `visitor` | Always 0: this host never loads a plugin as a visitor. |
 | Everything else | Not yet. Each returns the failure value its comment in the header gives (1, 0, NULL or -1) and logs once that it is missing. |
@@ -75,6 +77,37 @@ lines). A plugin's own `log()` lines start `Plugin <name>:`.
   and in co-op, where code stays writable. Code goes through `patch`, which checks the expected
   bytes first. `patch` returns 0 when the new bytes are already there, as on bbhost.
 
+**Hooks** (`src/plugin_hooks.c`):
+- **When:** only during `bb_plugin_image`, while the engine hooks are open. Earlier or later, a
+  hook returns 2 and logs why.
+- **The prologue:** the function's first `n` bytes, 5 to 64 of them, whole instructions, none of
+  them RIP-relative or a branch. bbhost asks for at least 14; this host accepts 5.
+  - The host checks that the bytes are there, and returns 1 if they aren't.
+  - It can't tell where instructions end, or whether one is RIP-relative. That stays the
+    plugin's job, as on bbhost.
+  - With `prologue` NULL (`hook2`), the bytes there are taken as they are, but never when they
+    start with a jump or call. That would be another hook (the port's own), and copying it
+    would send execution elsewhere.
+- **What the callback can do:** each `hook2` callback gets a `BbHookCtx`, and may rewrite
+  arguments and the low halves of `xmm0`-`xmm7`.
+  - Returning nonzero skips the function. Its caller gets `ctx->ret` in `rax`, and in `xmm0`'s
+    low 64 bits too. bbhost sets `rax` only, so a skipped function that returns a float or
+    double returns garbage there.
+  - A `hook` (v1) callback sees the integer arguments read-only. If it skips, the caller gets 0.
+- **Several plugins on one function:** each hook joins that function's chain, in load order.
+  - Each callback sees the arguments the one before it left. The first that skips decides, and
+    the rest don't run.
+  - A later hook must give the same length as the first, and the same original bytes.
+  - A function the port itself already hooks starts with a jump, so a plugin's hook there is
+    refused.
+- **If a plugin fails its start** after hooking, its callbacks are dropped. The stub stays in the
+  code and runs the rest of the chain.
+- **Callbacks run on whatever thread calls the function, on that thread's stack.** Game threads'
+  stacks can be small, so keep callbacks short. Do heavy work in `on_frame`.
+- **The stub:** it saves `rdi`-`r9`, `rax` and `xmm0`-`xmm7`, calls the chain, reloads them,
+  then runs the displaced prologue and jumps back. At a function's entry the caller's red zone
+  is already given up, so the stub may use the stack.
+
 **Careful with two missing functions:** their failure values read as "all clear".
 - `loading_screen()` returns 0, which means "no loading screen".
 - `key_bound()` returns 0, which means "no game action on this key".
@@ -82,8 +115,8 @@ lines). A plugin's own `log()` lines start `Plugin <name>:`.
 A bbhost plugin that waits for `loading_screen() == 0`, or picks keys by `key_bound()`, won't be
 protected by them here until they're provided.
 
-`docs/WORKPLAN.md` in the parent repository gives the order the rest arrives in: hooks and
-`call_guest` first, then event flags, params, the player and characters.
+`docs/WORKPLAN.md` in the parent repository gives the order the rest arrives in: event flags,
+params, the player and characters next.
 
 ## Building a plugin
 

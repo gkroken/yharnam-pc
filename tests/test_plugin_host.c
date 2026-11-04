@@ -16,8 +16,33 @@
 #include "engine_hooks.h"
 #include "plugin_host.h"
 
+typedef int64_t (BB_GUEST_ABI *IntFn)(int64_t, int64_t);
+typedef double (BB_GUEST_ABI *VecFn)(double, double);
+
+/* Scenario 6's functions, at the offsets tests/plugins/hook_plugin.c hooks. */
+enum { SUM = 0x1000, FADD = 0x1100, MUL = 0x1200, ARG7 = 0x1300, JUMPS = 0x1400, SUM_COPY = 0x1500 };
+/* sum(a, b) = a + 2b: push rbp; mov rbp, rsp; lea rax, [rdi+rsi*2]; pop rbp; ret */
+static const unsigned char sum_code[] = {0x55, 0x48, 0x89, 0xe5, 0x48, 0x8d, 0x04, 0x77, 0x5d, 0xc3};
+/* fadd(x, y) = x + y: addsd xmm0, xmm1; ret (the whole function is the displaced prologue) */
+static const unsigned char fadd_code[] = {0xf2, 0x0f, 0x58, 0xc1, 0xc3};
+/* mul(a, b) = a * b: push rbp; mov rbp, rsp; mov rax, rdi; imul rax, rsi; pop rbp; ret */
+static const unsigned char mul_code[] = {0x55, 0x48, 0x89, 0xe5, 0x48, 0x89, 0xf8, 0x48, 0x0f, 0xaf, 0xc6, 0x5d, 0xc3};
+/* arg7(...) = the 7th integer argument: mov rax, [rsp+8]; ret */
+static const unsigned char arg7_code[] = {0x48, 0x8b, 0x44, 0x24, 0x08, 0xc3};
+
+static long long call_result[4];
+static int call_status = -1;
+static DWORD WINAPI call_off_main(LPVOID fn) {
+    int (*call)(long long *);
+    memcpy(&call, &fn, sizeof call);
+    call_status = call(call_result);
+    return 0;
+}
+
+typedef const long long *(*ResultsFn)(void);
+
 #ifndef PLUGIN_DIR_A
-#error PLUGIN_DIR_A and PLUGIN_DIR_B name the test plugin folders
+#error PLUGIN_DIR_A, PLUGIN_DIR_B and PLUGIN_DIR_C name the test plugin folders
 #endif
 
 enum { IMAGE_SIZE = 0x10000 };
@@ -82,7 +107,8 @@ int main(void) {
     set_env("BB_ONLINE", "");
     set_env("BB_PLUGINS", "");
 
-    unsigned char *image = VirtualAlloc(NULL, IMAGE_SIZE, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    /* Executable: scenario 6 calls the hooked functions written into it. */
+    unsigned char *image = VirtualAlloc(NULL, IMAGE_SIZE, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
     assert(image);
     memset(image, 0x90, IMAGE_SIZE);
     CHECK(bb_hooks_init(image, IMAGE_SIZE) == 0);
@@ -120,7 +146,7 @@ int main(void) {
     CHECK(r[15] == 1);                                           /* write to a read-only page */
     CHECK(r[16] == 1 && r[17] == 0);                             /* missing: event_flag_get */
     CHECK(r[18] == 1 && r[19] == 0);                             /* missing: param_row */
-    CHECK(r[20] == 2 && r[21] == -1 && r[22] == 1 && r[23] == 0); /* hook, replace_text, hle, symbol */
+    CHECK(r[20] == 1 && r[21] == -1 && r[22] == 1 && r[23] == 0); /* hook (no callback), replace_text, hle, symbol */
     CHECK(r[24] == 1 && r[25] == 1 && r[26] == 1 && r[27] == 1); /* plugin_dir, host.name, no escape */
     CHECK(r[28] == 1 && r[29] == 0 && r[31] == 1 && r[32] == 1); /* write: code refused, data written */
     CHECK(r[30] == 0);                                           /* patch: already patched is done */
@@ -183,6 +209,61 @@ int main(void) {
     r = results_of("good.dll");
     CHECK(r[3] == 0 && r[5] == 0 && r[7] == 1);  /* not 1.09, no address, patch refused */
     CHECK(image[0x10] == 0x90);
+    bb_plugins_reset();
+
+    /* 6. Hooks and calls into the game, from folder C's plugins. */
+    set_env("BB_EBOOT_109", "1");
+    set_env("BB_PLUGIN_DIRS", PLUGIN_DIR_C);
+    memcpy(image + SUM, sum_code, sizeof sum_code);
+    memcpy(image + FADD, fadd_code, sizeof fadd_code);
+    memcpy(image + MUL, mul_code, sizeof mul_code);
+    memcpy(image + ARG7, arg7_code, sizeof arg7_code);
+    memcpy(image + SUM_COPY, sum_code, sizeof sum_code);  /* unhooked: only the length can refuse it */
+    /* jmp rel32 to sum: what a hook another tool placed looks like */
+    image[JUMPS] = 0xe9;
+    const int32_t to_sum = SUM - (JUMPS + 5);
+    memcpy(image + JUMPS + 1, &to_sum, 4);
+    CHECK(bb_plugins_install() == 2);  /* hooker and hooker2; hookfail unloaded */
+    CHECK(!loaded("hookfail.dll"));
+    ResultsFn results1 = (ResultsFn)export_of("hooker.dll", "hook_results");
+    ResultsFn results2 = (ResultsFn)export_of("hooker2.dll", "hook_results");
+    CHECK(results1 && results2);
+    const long long *h1 = results1(), *h2 = results2();
+    CHECK(h1[20] == 2 && h2[20] == 2);                 /* hook2 in bb_plugin_init: refused */
+    CHECK(h1[0] == 0 && h1[1] == 0 && h1[2] == 0);     /* sum, fadd (NULL prologue), mul */
+    CHECK(h1[3] == 1 && h1[4] == 1 && h1[5] == 1 && h1[6] == 1); /* wrong bytes, short, outside, no fn */
+    CHECK(h1[7] == 1 && image[JUMPS] == 0xe9);         /* a NULL prologue never takes a jump */
+    CHECK(image[SUM_COPY] == 0x55);                    /* the short hook left it alone */
+    CHECK(h2[0] == 0 && h2[1] == 2 && h2[2] == 2 && h2[3] == 1); /* chain; other lengths; not original */
+    CHECK(image[SUM] == 0xe9 && image[SUM + 5] == 0xcc);  /* jmp to the stub, the rest never run */
+    bb_hooks_seal();  /* the stubs become executable; no hook can be placed after this */
+
+    IntFn sum = (IntFn)(void *)(image + SUM), mul = (IntFn)(void *)(image + MUL);
+    VecFn fadd = (VecFn)(void *)(image + FADD);
+    CHECK(sum(2, 3) == 8);
+    CHECK(h1[10] == 1 && h2[10] == 1 && h2[11] == 2 && h2[12] == 3);  /* both ran, in order */
+    CHECK(sum(50, 3) == 2050);                       /* hooker made b 1000... */
+    CHECK(h2[11] == 50 && h2[12] == 1000);           /* ...and hooker2, later in the chain, saw it */
+    CHECK(sum(100, 3) == 7);                         /* hooker skipped with 7 */
+    CHECK(h1[10] == 3 && h2[10] == 2);               /* hooker2 does not run after a skip */
+    CHECK(sum(1, 1) == 3);                           /* hookfail's callback (a = 999999) never ran */
+    CHECK(fadd(1.5, 2.0) == 11.5);                   /* y rewritten in xmm1 */
+    CHECK(fadd(2.5, 1.0) == 99.0);                   /* skipped: the value in xmm0 */
+    CHECK(fadd(4.0, 0.5) == 4.5);
+    CHECK(mul(6, 7) == 42 && h1[11] == 6 && h1[12] == 7);  /* the v1 frame */
+    CHECK(mul(13, 2) == 0);                          /* v1 skip: the caller gets 0 */
+
+    int (*late)(void) = (int (*)(void))export_of("hooker.dll", "hooker_late_hook");
+    CHECK(late && late() == 2);                      /* sealed: no new hooks */
+    int (*call)(long long *) = (int (*)(long long *))export_of("hooker.dll", "hooker_call");
+    CHECK(call && call(call_result) == 0);
+    CHECK(call_result[0] == 11 && call_result[1] == 115 && call_result[2] == 42 && call_result[3] == 1);
+    void *call_arg;
+    memcpy(&call_arg, &call, sizeof call_arg);
+    HANDLE t = CreateThread(NULL, 0, call_off_main, call_arg, 0, NULL);  /* off the main thread */
+    WaitForSingleObject(t, INFINITE);
+    CloseHandle(t);
+    CHECK(call_status != 0);
     bb_plugins_reset();
 
     printf("plugin host: %d checks passed\n", checks);

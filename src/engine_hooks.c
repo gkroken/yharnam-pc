@@ -117,6 +117,12 @@ static unsigned char *stub(size_t size) {
     return at;
 }
 
+unsigned char *bb_hook_code(size_t n) {
+    unsigned char *at = stub(n);
+    if (!at) refuse("no stub space (not initialised, sealed or full)");
+    return at;
+}
+
 static int in_image(uint64_t at, size_t n) { return g_image && at <= g_image_size && n <= g_image_size - at; }
 
 static void put_rel32(unsigned char *field, const unsigned char *next, const unsigned char *to) {
