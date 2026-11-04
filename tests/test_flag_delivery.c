@@ -54,6 +54,25 @@ static SetFn g_set;
 static StatFn g_stat;
 static ChrFn g_chr;
 static int g_off_set = -1, g_off_stat = -1, g_off_chr = -1;
+
+/* The overlay's entry points, as probe.c hands them over: here, recorders. */
+static char said[64], placed[64];
+static float said_seconds, placed_x, placed_y, placed_scale;
+static unsigned placed_align;
+static int fake_message(const char *text, float seconds) {
+    snprintf(said, sizeof said, "%s", text);
+    said_seconds = seconds;
+    return 0;
+}
+static int fake_text(const char *text, float seconds, float x, float y, float scale, unsigned align) {
+    (void)seconds;
+    snprintf(placed, sizeof placed, "%s", text);
+    placed_x = x;
+    placed_y = y;
+    placed_scale = scale;
+    placed_align = align;
+    return 0;
+}
 static DWORD WINAPI off_main(LPVOID unused) {
     (void)unused;
     size_t count = 0;
@@ -102,6 +121,7 @@ int main(void) {
     unsigned char *wcm = calloc(1, 0x1000), *player = calloc(1, 0x400), *player_vt = calloc(1, 0x400);
     put64(player, (uint64_t)(uintptr_t)player_vt);
     put64(wcm + 0x60, (uint64_t)(uintptr_t)player);
+    put32(player + 0x3f8, 0xffffffffu);  /* between maps until the world-load checks place it */
     put64(AT(0x593e878), (uint64_t)(uintptr_t)wcm);
 
     /* 1. Folder E alone: nobody registers in bb_plugin_image, so nobody watches. */
@@ -153,6 +173,42 @@ int main(void) {
     CHECK(seen_on() == 12 && seen_off() == 12);
     int (*seen_late)(void) = (int (*)(void))export_of("late.dll", "flag_seen");
     CHECK(seen_late && seen_late() == 12);  /* the late registrant heard every round too */
+
+    /* Text: without the overlay's entry points both refuse; with them, they get the text. */
+    int (*say)(const char *) = (int (*)(const char *))export_of("late.dll", "say");
+    int (*place)(const char *) = (int (*)(const char *))export_of("late.dll", "place");
+    CHECK(say && place && say("hello") == 1 && place("there") == 1);
+    bb_plugins_set_text(fake_message, fake_text);
+    CHECK(say("Round 2") == 0 && !strcmp(said, "Round 2") && said_seconds == 2.0f);
+    CHECK(place("x") == 0 && !strcmp(placed, "x") && placed_x == 0.25f && placed_y == 0.5f && placed_scale == 1.5f &&
+          placed_align == 2);
+
+    /* World loads: the player's block at ChrIns+0x3f8. Late registered in bb_plugin_image. */
+    int (*loads)(void) = (int (*)(void))export_of("late.dll", "world_loads");
+    uint32_t (*load_block)(void) = (uint32_t (*)(void))export_of("late.dll", "world_block");
+    CHECK(loads && load_block);
+    put32(player + 0x3f8, 0xffffffffu);        /* between maps: nothing yet */
+    bb_plugins_frame();
+    CHECK(loads() == 0);
+    put32(player + 0x3f8, 0x18010000);         /* placed in the Hunter's Dream */
+    bb_plugins_frame();
+    CHECK(loads() == 1 && load_block() == 0x18010000);
+    bb_plugins_frame();                        /* the same player, the same block: no load */
+    CHECK(loads() == 1);
+    put32(player + 0x3f8, 0x18000000);         /* a warp to another block */
+    bb_plugins_frame();
+    CHECK(loads() == 2 && load_block() == 0x18000000);
+    unsigned char *player2 = calloc(1, 0x400);  /* a load: a new main player, the same block */
+    memcpy(player2, player, 0x400);
+    put64(wcm + 0x60, (uint64_t)(uintptr_t)player2);
+    bb_plugins_frame();
+    CHECK(loads() == 3);
+    put64(wcm + 0x60, 0);                      /* no player: nothing */
+    bb_plugins_frame();
+    CHECK(loads() == 3);
+    put64(wcm + 0x60, (uint64_t)(uintptr_t)player2);  /* back: a new placement after none */
+    bb_plugins_frame();
+    CHECK(loads() == 4);
 
     printf("flag delivery: %d checks passed\n", checks);
     return 0;

@@ -59,6 +59,17 @@ static enum Phase g_phase;
 static int g_tick_registered;
 static BbHostApi g_api;
 static DWORD g_main_thread;  /* the thread that starts the plugins: the game's main thread here */
+static int (*g_text_message)(const char *, float);
+static int (*g_text_line)(const char *, float, float, float, float, unsigned);
+typedef struct {
+    int owner;
+    void (*fn)(uint32_t, void *);
+    void *user;
+} WorldCallback;
+static WorldCallback g_world_callbacks[MAX_CALLBACKS];
+static int g_world_count;
+static uint64_t g_last_player;
+static uint32_t g_last_block;
 
 /* The plugin whose code is running on this thread (its start, its callback), for log lines
  * and the ownership of what it registers. -1 outside a plugin's call. */
@@ -541,20 +552,61 @@ static int api_sp_effect_has(void *chr, int32_t sp_effect) {
     return bb_game_sp_effect_has(chr, sp_effect);
 }
 
+/* --- text over the game, and world loads ---------------------------------------------------------- */
+
+void bb_plugins_set_text(int (*message)(const char *, float),
+                         int (*text)(const char *, float, float, float, float, unsigned)) {
+    g_text_message = message;
+    g_text_line = text;
+}
+
+static int api_show_message(const char *text, float seconds) {
+    if (!text || !g_text_message || !(seconds > 0.0f)) return 1;
+    return g_text_message(text, seconds);
+}
+
+static int api_show_text(const char *text, float seconds, float x, float y, float scale, uint32_t align) {
+    if (!text || !g_text_line || !(seconds > 0.0f)) return 1;
+    return g_text_line(text, seconds, x, y, scale, align);
+}
+
+static int api_on_world_load(void (*fn)(uint32_t, void *), void *user) {
+    if (!fn) return 1;
+    AcquireSRWLockExclusive(&g_lock);
+    const int ok = g_world_count < MAX_CALLBACKS;
+    if (ok) g_world_callbacks[g_world_count++] = (WorldCallback){t_current, fn, user};
+    ReleaseSRWLockExclusive(&g_lock);
+    return ok ? 0 : 1;
+}
+
+/* A world load is a new main player (every load builds one) or the player in another block (a
+ * warp that keeps it): bbhost's test, once a frame. */
+static void deliver_world_loads(void) {
+    uint32_t block = 0;
+    const uint64_t player = bb_game_main_player();
+    if (!player || bb_game_player_block(&block)) {
+        g_last_player = 0;
+        return;
+    }
+    if (player == g_last_player && block == g_last_block) return;
+    g_last_player = player;
+    g_last_block = block;
+    WorldCallback now[MAX_CALLBACKS];
+    AcquireSRWLockShared(&g_lock);
+    const int n = g_world_count;
+    memcpy(now, g_world_callbacks, (size_t)n * sizeof *now);
+    ReleaseSRWLockShared(&g_lock);
+    for (int i = 0; i < n; ++i) {
+        t_current = now[i].owner;
+        now[i].fn(block, now[i].user);
+    }
+    t_current = -1;
+}
+
 static uint64_t api_symbol(const char *name) {
     (void)name;
     missing("symbol");
     return 0;
-}
-static int api_on_world_load(void (*fn)(uint32_t, void *), void *user) {
-    (void)fn, (void)user;
-    missing("on_world_load");
-    return 1;
-}
-static int api_show_message(const char *text, float seconds) {
-    (void)text, (void)seconds;
-    missing("show_message");
-    return 1;
 }
 static int api_set_time_scale(float scale) {
     (void)scale;
@@ -625,11 +677,6 @@ static int api_key_bound(uint16_t scancode) {
     (void)scancode;
     missing("key_bound");
     return 0;
-}
-static int api_show_text(const char *text, float seconds, float x, float y, float scale, uint32_t align) {
-    (void)text, (void)seconds, (void)x, (void)y, (void)scale, (void)align;
-    missing("show_text");
-    return 1;
 }
 static int api_on_scene_category(int32_t pass, void (*fn)(uint64_t, void *), void *user) {
     (void)pass, (void)fn, (void)user;
@@ -753,6 +800,10 @@ static void unload(int index, const char *why) {
     for (int i = 0; i < g_frame_count; ++i)
         if (g_frames[i].owner != index) g_frames[kept++] = g_frames[i];
     g_frame_count = kept;
+    kept = 0;
+    for (int i = 0; i < g_world_count; ++i)
+        if (g_world_callbacks[i].owner != index) g_world_callbacks[kept++] = g_world_callbacks[i];
+    g_world_count = kept;
     kept = 0;
     for (int i = 0; i < g_flag_count; ++i)
         if (g_flag_callbacks[i].owner != index) g_flag_callbacks[kept++] = g_flag_callbacks[i];
@@ -903,6 +954,7 @@ static void deliver_flag_changes(void) {
 }
 
 void bb_plugins_frame(void) {
+    if (g_world_count && g_phase == PHASE_RUNNING && eboot_is_109()) deliver_world_loads();
     if (bb_game_watching_flags()) deliver_flag_changes();
     FrameCallback now[MAX_CALLBACKS];
     AcquireSRWLockShared(&g_lock);
@@ -925,6 +977,9 @@ void bb_plugins_reset(void) {
     g_count = 0;
     g_frame_count = 0;
     g_flag_count = 0;
+    g_world_count = 0;
+    g_last_player = 0;
+    g_last_block = 0;
     bb_plugin_hooks_reset();
     bb_game_reset();
     g_phase = PHASE_NONE;

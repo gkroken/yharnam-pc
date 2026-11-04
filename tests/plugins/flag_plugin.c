@@ -21,6 +21,17 @@
 
 static const BbHostApi *g_api;
 static int g_seen;  /* changes of flag 7 this plugin was told about */
+static int g_loads;
+static uint32_t g_last_block;
+__attribute__((unused)) static void on_load(uint32_t block, void *user) {
+    (void)user;
+    ++g_loads;
+    g_last_block = block;
+}
+BB_PLUGIN_EXPORT int world_loads(void) { return g_loads; }
+BB_PLUGIN_EXPORT uint32_t world_block(void) { return g_last_block; }
+BB_PLUGIN_EXPORT int say(const char *text) { return g_api->show_message(text, 2.0f); }
+BB_PLUGIN_EXPORT int place(const char *text) { return g_api->show_text(text, 3.0f, 0.25f, 0.5f, 1.5f, BB_TEXT_RIGHT); }
 
 static void on_flag(uint32_t id, int value, void *user) {
     (void)user;
@@ -46,7 +57,7 @@ BB_PLUGIN_EXPORT const BbPluginInfo bb_plugin_info = {BB_PLUGIN_API_VERSION, 0, 
 BB_PLUGIN_EXPORT int bb_plugin_image(const BbHostApi *api) {
     g_api = api;
 #if VARIANT == 3
-    return 0;
+    return api->on_world_load(on_load, 0);
 #else
     return api->on_event_flag(on_flag, 0);  /* nonzero (no watcher) would unload: the test sees it */
 #endif

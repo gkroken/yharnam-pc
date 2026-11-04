@@ -43,6 +43,8 @@ int bb_game_player_stat_set(const char *name, int64_t value);
  * sub-ids: m24_01_00_00 = 0x18010000). 0, or 1 when the world has no player. */
 int bb_game_player_position(float xyz[3], float *yaw);
 int bb_game_player_block(uint32_t *block);
+/* The main player's ChrIns, or 0 while the world has none. */
+uint64_t bb_game_main_player(void);
 
 /* The characters WorldChrMan holds: the main player first, then each handle-indexed ChrSet's,
  * each once. Main thread only (the dedup list is shared). Up to max into out (may be NULL), the total into *count. 0, or 1 before the world

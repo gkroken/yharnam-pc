@@ -46,6 +46,11 @@ void bbgpu_trophy_unlocked(int32_t id, int64_t timestamp);
 /* Called at the start of every frame submission (sceVideoOutSubmitFlip / SubmitEopFlip), on the
  * game's thread that submits it: the loader's per-frame work for the engine features. */
 void bbgpu_set_frame_callback(void (*callback)(void));
+/* Text native plugins put over the game (shim/bbport_plugin_text.cpp): a banner for `seconds`,
+ * and a line placed at (x, y) as fractions of the window, `align` BB_TEXT_* (bbhost_plugin.h).
+ * Each replaces the last of its kind. Any thread. 0, or 1 for a NULL text. */
+int bbgpu_plugin_message(const char *text, float seconds);
+int bbgpu_plugin_text(const char *text, float seconds, float x, float y, float scale, unsigned align);
 /* bbport.ini settings by key, for the in-game PC menu: on/off as 0/1, upscaler as its index,
  * output_res as an index, live_resolution -1 (auto)/0/1, model_lod -2..2. get and default
  * return 0 for a key they do not handle; set also saves the file. */

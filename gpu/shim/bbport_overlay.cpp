@@ -30,6 +30,7 @@
 #include "bbport_settings.h"
 #include "bbport_trophies.h"
 #include "bbport_trophy_toast.h"
+#include "bbport_plugin_text.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "imgui_impl_vulkan.h"
@@ -1758,6 +1759,9 @@ void DrawWindows(float display_height) {
     if (BbToast::Busy()) {
         BbToast::Draw(base_scale);
     }
+    if (BbPluginText::Busy()) {
+        BbPluginText::Draw(base_scale);
+    }
 }
 
 } // namespace
@@ -1954,7 +1958,7 @@ bool HandleEvent(const SDL_Event& event) {
 bool Visible() {
     return initialized && (menu_open || text_entry_active || BbSettings::Get().show_fps ||
                            BbMap::IsOpen() || BbAtlasMenu::Visible() || BbAtlasMenu::Animating() ||
-                           BbToast::Busy());
+                           BbToast::Busy() || BbPluginText::Busy());
 }
 
 bool CapturesInput() {

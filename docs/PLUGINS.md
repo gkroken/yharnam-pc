@@ -66,6 +66,8 @@ lines). A plugin's own `log()` lines start `Plugin <name>:`.
 | `player_stat_get`, `player_stat_set` | Yes, by bbhost's names: `hp`, `max_hp`, `stamina`, `max_stamina`, `vitality`, `endurance`, `strength`, `skill`, `bloodtinge`, `arcane`, `insight`, `level`, `echoes`, plus the save's counters `ng_cycle`, `coop_helps`, `invader_kills`, `true_deaths`, `deaths`, `play_time_ms`. At the title the record already exists and reads 0s, as on bbhost. `set` works from the main thread only. |
 | `param_row`, `param_get`, `param_set`, `param_ids` | Yes (`src/plugin_params.c`). See below. |
 | `chr_list`, `sp_effect_has`, `sp_effect_apply` | Yes. See below. |
+| `show_message`, `show_text` | Yes, from any thread. A banner low in the middle (`show_message`), and one line placed by the plugin (`show_text`: x and y as fractions of the window, `BB_TEXT_*` alignment, scale). Each replaces the last of its kind, and fades over its last half second. The overlay draws them over the game, the menus included. |
+| `on_world_load` | Yes. On the main thread, at the start of a frame, when the world gets a new main player (every load builds one) or the player is in another block (a warp). It gets the block, packed as `player_block` packs it. This is bbhost's test; a load's screen may still be up. |
 | `player_position`, `player_block` | Yes. They return 1 while the world has no player (the title, a load). |
 | `register_hle` | No: this port's system functions are its own runtime. Returns 1 and logs it. |
 | `visitor` | Always 0: this host never loads a plugin as a visitor. |
@@ -204,8 +206,8 @@ above can't run, and the game's definition is used as it is.
 A bbhost plugin that waits for `loading_screen() == 0`, or picks keys by `key_bound()`, won't be
 protected by them here until they're provided.
 
-`docs/WORKPLAN.md` in the parent repository gives the order the rest arrives in: messages,
-the loading screen and warps next.
+`docs/WORKPLAN.md` in the parent repository gives the order the rest arrives in: the loading
+screen and warps next.
 
 ## Building a plugin
 

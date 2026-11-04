@@ -25,6 +25,11 @@ int bb_plugins_install(void);
  * bb_on_main_frame by bb_plugins_install; tests call it directly. */
 void bb_plugins_frame(void);
 
+/* Where show_message and show_text go: the overlay's entry points (gpu/bbgpu.h), set by probe.c
+ * before bb_plugins_install; tests set their own. Without them both return 1. */
+void bb_plugins_set_text(int (*message)(const char *, float),
+                         int (*text)(const char *, float, float, float, float, unsigned));
+
 /* Tests: unloads every plugin and forgets all state, so another install can run. */
 void bb_plugins_reset(void);
 

@@ -232,6 +232,8 @@ int bb_game_player_position(float xyz[3], float *yaw) {
     return 0;
 }
 
+uint64_t bb_game_main_player(void) { return main_player(); }
+
 int bb_game_player_block(uint32_t *block) {
     const uint64_t chr = main_player();
     uint32_t b = 0;
