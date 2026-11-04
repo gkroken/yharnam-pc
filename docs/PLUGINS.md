@@ -148,8 +148,14 @@ lines). A plugin's own `log()` lines start `Plugin <name>:`.
     plugin registers. So register in `bb_plugin_image`. After the start, registering works only
     if another plugin already started the watcher.
   - Writes the game makes through its range setters and save loads aren't reported.
+  - Each frame delivers the changes that waited when it began. A callback's own
+    `event_flag_set` (or anything a callback triggers) arrives next frame, so callbacks that keep
+    forcing a flag can't hang the game.
   - The queue holds 1024 changes between frames; more are counted, and the log says how many
     were dropped.
+  - The watcher's hook on the setter is 8 bytes long. A plugin that hooks that setter itself
+    with another length (bbhost asks for at least 14) can't share it: whichever comes second
+    gets 2. Hook the setter yourself, or use `on_event_flag`, not both.
 
 **Careful with two missing functions:** their failure values read as "all clear".
 - `loading_screen()` returns 0, which means "no loading screen".

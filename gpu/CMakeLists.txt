@@ -357,6 +357,30 @@ if (WIN32)
     set(BB_TEST_PLUGINS_C ${CMAKE_BINARY_DIR}/test-plugins/c)
     add_executable(plugin-host-test EXCLUDE_FROM_ALL ../tests/test_plugin_host.c ../src/plugin_host.c
         ../src/plugin_hooks.c ../src/plugin_game.c ../src/engine_hooks.c)
+    # Flag delivery and the game-state API rules through real plugins (tests/plugins/flag_plugin.c):
+    # forcers in folder d, a late registrant in folder e.
+    set(BB_TEST_PLUGINS_D ${CMAKE_BINARY_DIR}/test-plugins/d)
+    set(BB_TEST_PLUGINS_E ${CMAKE_BINARY_DIR}/test-plugins/e)
+    add_executable(flag-delivery-test EXCLUDE_FROM_ALL ../tests/test_flag_delivery.c ../src/plugin_host.c
+        ../src/plugin_hooks.c ../src/plugin_game.c ../src/engine_hooks.c)
+    target_include_directories(flag-delivery-test PRIVATE ../src ../include)
+    target_compile_options(flag-delivery-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+    target_compile_definitions(flag-delivery-test PRIVATE WIN32_LEAN_AND_MEAN
+        PLUGIN_DIR_D="${BB_TEST_PLUGINS_D}" PLUGIN_DIR_E="${BB_TEST_PLUGINS_E}")
+    foreach(variant IN ITEMS 1:force_on:D 2:force_off:D 3:late:E)
+        string(REPLACE ":" ";" parts ${variant})
+        list(GET parts 0 number)
+        list(GET parts 1 name)
+        list(GET parts 2 folder)
+        add_library(test-flag-plugin-${number} SHARED EXCLUDE_FROM_ALL ../tests/plugins/flag_plugin.c)
+        target_include_directories(test-flag-plugin-${number} PRIVATE ../include)
+        target_compile_definitions(test-flag-plugin-${number} PRIVATE VARIANT=${number})
+        target_compile_options(test-flag-plugin-${number} PRIVATE -Wall -Wextra -Werror)
+        set_target_properties(test-flag-plugin-${number} PROPERTIES PREFIX "" OUTPUT_NAME ${name}
+            RUNTIME_OUTPUT_DIRECTORY ${BB_TEST_PLUGINS_${folder}}
+            ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/test-plugins/lib/flag-${number})
+        add_dependencies(flag-delivery-test test-flag-plugin-${number})
+    endforeach()
     # The game's state (src/plugin_game.c) against fake game structures in an image big enough
     # for the real addresses.
     add_executable(game-state-test EXCLUDE_FROM_ALL ../tests/test_game_state.c ../src/plugin_game.c

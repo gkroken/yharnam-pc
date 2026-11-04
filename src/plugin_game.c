@@ -118,6 +118,13 @@ size_t bb_game_take_flag_changes(BbFlagChange *out, size_t max, uint64_t *lost) 
     return n;
 }
 
+size_t bb_game_pending_flag_changes(void) {
+    AcquireSRWLockShared(&g_queue_lock);
+    const size_t n = g_count;
+    ReleaseSRWLockShared(&g_queue_lock);
+    return n;
+}
+
 int bb_game_event_flag_set(uint32_t id, int value) {
     unsigned char mask = 0, was = 0;
     const uint64_t at = flag_byte(id, &mask);

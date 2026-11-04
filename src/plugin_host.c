@@ -872,7 +872,12 @@ static void deliver_flag_changes(void) {
     BbFlagChange changes[256];
     uint64_t lost = 0;
     size_t n;
-    while ((n = bb_game_take_flag_changes(changes, 256, &lost)) != 0) {
+    /* Only what waited when delivery began: a callback's own event_flag_set queues a change
+     * that reaches the callbacks next frame. Draining until empty would never end when
+     * callbacks keep changing a flag (two plugins forcing it opposite ways). port-e230c49-F1. */
+    size_t budget = bb_game_pending_flag_changes();
+    while (budget && (n = bb_game_take_flag_changes(changes, budget < 256 ? budget : 256, &lost)) != 0) {
+        budget -= n;
         for (size_t c = 0; c < n; ++c)
             for (int i = 0; i < ncb; ++i) {
                 t_current = callbacks[i].owner;

@@ -31,6 +31,8 @@ typedef struct {
 /* The changes since the last call, oldest first (at most max); *lost counts changes dropped
  * because more came between two calls than the queue holds. */
 size_t bb_game_take_flag_changes(BbFlagChange *out, size_t max, uint64_t *lost);
+/* How many changes wait now. */
+size_t bb_game_pending_flag_changes(void);
 
 /* The local player's numbers by bbhost's names ("level", "echoes", "vitality", "hp", ...,
  * "deaths", "play_time_ms"). 0, or 1 for an unknown name or no loaded character. */
