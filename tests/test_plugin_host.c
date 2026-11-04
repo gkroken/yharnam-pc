@@ -20,7 +20,8 @@ typedef int64_t (BB_GUEST_ABI *IntFn)(int64_t, int64_t);
 typedef double (BB_GUEST_ABI *VecFn)(double, double);
 
 /* Scenario 6's functions, at the offsets tests/plugins/hook_plugin.c hooks. */
-enum { SUM = 0x1000, FADD = 0x1100, MUL = 0x1200, ARG7 = 0x1300, JUMPS = 0x1400, SUM_COPY = 0x1500 };
+enum { SUM = 0x1000, FADD = 0x1100, MUL = 0x1200, ARG7 = 0x1300, JUMPS = 0x1400, SUM_COPY = 0x1500,
+       CHAIN = 0x1600, OVER = 0x1700, PATCHED = 0x1800, AL = 0x1900, CHAIN2 = 0x1a00, RIPJUMP = 0x1b00 };
 /* sum(a, b) = a + 2b: push rbp; mov rbp, rsp; lea rax, [rdi+rsi*2]; pop rbp; ret */
 static const unsigned char sum_code[] = {0x55, 0x48, 0x89, 0xe5, 0x48, 0x8d, 0x04, 0x77, 0x5d, 0xc3};
 /* fadd(x, y) = x + y: addsd xmm0, xmm1; ret (the whole function is the displaced prologue) */
@@ -29,8 +30,12 @@ static const unsigned char fadd_code[] = {0xf2, 0x0f, 0x58, 0xc1, 0xc3};
 static const unsigned char mul_code[] = {0x55, 0x48, 0x89, 0xe5, 0x48, 0x89, 0xf8, 0x48, 0x0f, 0xaf, 0xc6, 0x5d, 0xc3};
 /* arg7(...) = the 7th integer argument: mov rax, [rsp+8]; ret */
 static const unsigned char arg7_code[] = {0x48, 0x8b, 0x44, 0x24, 0x08, 0xc3};
+/* al(...) = al at entry, the vector-register count a variadic call carries: movzx eax, al; nop;
+ * nop; ret. Hooked, it shows whether the stub gives rax back. */
+static const unsigned char al_code[] = {0x0f, 0xb6, 0xc0, 0x90, 0x90, 0xc3};
+typedef int64_t (BB_GUEST_ABI *VarFn)(int64_t, ...);
 
-static long long call_result[4];
+static long long call_result[5];
 static int call_status = -1;
 static DWORD WINAPI call_off_main(LPVOID fn) {
     int (*call)(long long *);
@@ -151,6 +156,7 @@ int main(void) {
     CHECK(r[28] == 1 && r[29] == 0 && r[31] == 1 && r[32] == 1); /* write: code refused, data written */
     CHECK(r[30] == 0);                                           /* patch: already patched is done */
     CHECK(r[33] == 1);                                           /* eboot_sha256 from the image phase */
+    CHECK(r[36] == -1);                                          /* 1.09: the non-1.09 hook was not tried */
     CHECK(r[34] == 1 && r[35] == 0);                             /* write: data into code refused */
     char dir[MAX_PATH];
     snprintf(dir, sizeof dir, "%s\\plugins\\good_b", user);
@@ -208,6 +214,8 @@ int main(void) {
     CHECK(bb_plugins_install() == 2);
     r = results_of("good.dll");
     CHECK(r[3] == 0 && r[5] == 0 && r[7] == 1);  /* not 1.09, no address, patch refused */
+    CHECK(r[36] == 1);                           /* ...and no hook */
+    CHECK(image[0x1000] == 0x90);
     CHECK(image[0x10] == 0x90);
     bb_plugins_reset();
 
@@ -219,10 +227,24 @@ int main(void) {
     memcpy(image + MUL, mul_code, sizeof mul_code);
     memcpy(image + ARG7, arg7_code, sizeof arg7_code);
     memcpy(image + SUM_COPY, sum_code, sizeof sum_code);  /* unhooked: only the length can refuse it */
+    memcpy(image + CHAIN, sum_code, sizeof sum_code);
+    memcpy(image + CHAIN2, sum_code, sizeof sum_code);
+    memcpy(image + OVER, sum_code, sizeof sum_code);
+    memcpy(image + PATCHED, sum_code, sizeof sum_code);
+    memcpy(image + AL, al_code, sizeof al_code);
+    /* bytes 4-7 rewritten (with themselves) as one of the port's own patches or mid-hooks would:
+     * a plugin hook over them must be refused even with a NULL prologue */
+    CHECK(bb_patch(PATCHED + 4, sum_code + 4, sum_code + 4, 4) == 0);
     /* jmp rel32 to sum: what a hook another tool placed looks like */
     image[JUMPS] = 0xe9;
     const int32_t to_sum = SUM - (JUMPS + 5);
     memcpy(image + JUMPS + 1, &to_sum, 4);
+    /* jmp [rip+0] with its 8-byte target: what Hunter's Atlas lamp travel writes */
+    image[RIPJUMP] = 0xff;
+    image[RIPJUMP + 1] = 0x25;
+    memset(image + RIPJUMP + 2, 0, 4);
+    const uint64_t to_sum_abs = (uint64_t)(uintptr_t)(image + SUM);
+    memcpy(image + RIPJUMP + 6, &to_sum_abs, 8);
     CHECK(bb_plugins_install() == 2);  /* hooker and hooker2; hookfail unloaded */
     CHECK(!loaded("hookfail.dll"));
     ResultsFn results1 = (ResultsFn)export_of("hooker.dll", "hook_results");
@@ -233,8 +255,14 @@ int main(void) {
     CHECK(h1[0] == 0 && h1[1] == 0 && h1[2] == 0);     /* sum, fadd (NULL prologue), mul */
     CHECK(h1[3] == 1 && h1[4] == 1 && h1[5] == 1 && h1[6] == 1); /* wrong bytes, short, outside, no fn */
     CHECK(h1[7] == 1 && image[JUMPS] == 0xe9);         /* a NULL prologue never takes a jump */
+    CHECK(h1[16] == 1 && image[RIPJUMP] == 0xff);      /* ...nor a jmp [rip] */
     CHECK(image[SUM_COPY] == 0x55);                    /* the short hook left it alone */
     CHECK(h2[0] == 0 && h2[1] == 2 && h2[2] == 2 && h2[3] == 1); /* chain; other lengths; not original */
+    CHECK(h1[8] == 0 && h1[9] == 0 && h1[13] == 0 && h1[15] == 0); /* chain, over, al, chain2 */
+    CHECK(h1[14] == 1);                                /* call_guest in bb_plugin_image: refused */
+    CHECK(h2[4] == 0 && h2[5] == 0);                   /* v1 joined chain's, hook2 chain2's */
+    CHECK(h2[6] == 2 && h2[7] == 2);                   /* inside another hook, over a patch: refused */
+    CHECK(image[PATCHED] == 0x55);                     /* the refused hook left the code alone */
     CHECK(image[SUM] == 0xe9 && image[SUM + 5] == 0xcc);  /* jmp to the stub, the rest never run */
     bb_hooks_seal();  /* the stubs become executable; no hook can be placed after this */
 
@@ -252,12 +280,22 @@ int main(void) {
     CHECK(fadd(4.0, 0.5) == 4.5);
     CHECK(mul(6, 7) == 42 && h1[11] == 6 && h1[12] == 7);  /* the v1 frame */
     CHECK(mul(13, 2) == 0);                          /* v1 skip: the caller gets 0 */
+    IntFn chain = (IntFn)(void *)(image + CHAIN), chain2 = (IntFn)(void *)(image + CHAIN2);
+    IntFn over = (IntFn)(void *)(image + OVER);
+    CHECK(chain(21, 1) == 0);                        /* hooker set 55 and ran on; the v1 skip gives 0 */
+    CHECK(chain(1, 1) == 3);
+    CHECK(chain2(22, 1) == 0);                       /* hooker set 66; hooker2's hook2 skip starts at 0 */
+    CHECK(chain2(1, 1) == 3);
+    CHECK(over(2, 3) == 8);                          /* the refused overlap left hooker's hook working */
+    VarFn al = (VarFn)(void *)(image + AL);
+    CHECK(al(0, 1.0, 2.0, 3.0) == 3);                /* three vector registers: al 3, through the stub */
 
     int (*late)(void) = (int (*)(void))export_of("hooker.dll", "hooker_late_hook");
     CHECK(late && late() == 2);                      /* sealed: no new hooks */
     int (*call)(long long *) = (int (*)(long long *))export_of("hooker.dll", "hooker_call");
     CHECK(call && call(call_result) == 0);
     CHECK(call_result[0] == 11 && call_result[1] == 115 && call_result[2] == 42 && call_result[3] == 1);
+    CHECK(call_result[4] == 8);                      /* call_guest sets al for a variadic callee */
     void *call_arg;
     memcpy(&call_arg, &call, sizeof call_arg);
     HANDLE t = CreateThread(NULL, 0, call_off_main, call_arg, 0, NULL);  /* off the main thread */

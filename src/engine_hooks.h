@@ -43,6 +43,10 @@ int bb_hooks_sealed(void);
 void bb_image_code(uint64_t offset, uint64_t size);
 /* Whether any of the n bytes at an image offset lie in an executable segment. */
 int bb_image_is_code(uint64_t offset, size_t n);
+/* The image ranges hooks and patches rewrote (every bb_hook_* and bb_patch here records its own;
+ * the plugin host records its hooks and patch() calls): a later hook overlapping one is refused. */
+void bb_image_rewritten(uint64_t offset, size_t n);
+int bb_image_is_rewritten(uint64_t offset, size_t n);
 /* n bytes of stub code within rel32 reach of the image (16-byte aligned, filled with int3), for
  * hooks built outside this file (plugin_hooks.c). NULL once sealed or when full. */
 unsigned char *bb_hook_code(size_t n);

@@ -48,6 +48,28 @@ void bb_image_code(uint64_t offset, uint64_t size) {
     }
 }
 
+/* Every range of the image a hook or patch here rewrote (and the plugin host's own, through
+ * bb_image_rewritten): a later hook over any of them would copy a moved jump or cut one. */
+enum { MAX_REWRITES = 1024 };
+static uint64_t g_rewritten[MAX_REWRITES][2];
+static int g_rewritten_count, g_rewritten_full;
+
+void bb_image_rewritten(uint64_t offset, size_t n) {
+    if (g_rewritten_count < MAX_REWRITES) {
+        g_rewritten[g_rewritten_count][0] = offset;
+        g_rewritten[g_rewritten_count++][1] = n;
+    } else {
+        g_rewritten_full = 1;  /* from now on, every range counts as rewritten */
+    }
+}
+
+int bb_image_is_rewritten(uint64_t offset, size_t n) {
+    if (g_rewritten_full) return 1;
+    for (int i = 0; i < g_rewritten_count; ++i)
+        if (offset < g_rewritten[i][0] + g_rewritten[i][1] && g_rewritten[i][0] < offset + n) return 1;
+    return 0;
+}
+
 int bb_image_is_code(uint64_t offset, size_t n) {
     for (int i = 0; i < g_code_count; ++i)
         if (offset < g_code[i][0] + g_code[i][1] && g_code[i][0] < offset + n) return 1;
@@ -154,6 +176,7 @@ int bb_hook_call(uint64_t at, uint64_t target, void *host) {
     unsigned char *p = emit_movabs_r11(s, host);
     *p++ = 0x41; *p++ = 0xff; *p++ = 0xe3;  /* jmp r11 */
     put_rel32(site + 1, site + 5, s);
+    bb_image_rewritten(at, 5);
     return 0;
 }
 
@@ -219,6 +242,7 @@ int bb_patch(uint64_t at, const void *expected, const void *replacement, size_t 
     if (!expected || !replacement || !n || !in_image(at, n)) return refuse("address outside the image");
     if (memcmp(g_image + at, expected, n)) return refuse("unexpected bytes at the patch site");
     memcpy(g_image + at, replacement, n);
+    bb_image_rewritten(at, n);
     return 0;
 }
 
@@ -260,6 +284,7 @@ int bb_hook_entry(uint64_t at, BbCode prologue, void *host) {
     site[0] = 0xe9;
     put_rel32(site + 1, site + 5, s);
     memset(site + 5, 0xcc, n - 5);  /* never reached: the stub returns past them */
+    bb_image_rewritten(at, n);
     return 0;
 }
 
@@ -274,6 +299,7 @@ static unsigned char *mid_site(uint64_t at, BbCode original) {
 
 /* The site jumps to the stub; its other bytes are never run (the stub returns past them). */
 static void divert(unsigned char *site, size_t n, const unsigned char *to) {
+    bb_image_rewritten((uint64_t)(site - g_image), n);
     site[0] = 0xe9;
     put_rel32(site + 1, site + 5, to);
     memset(site + 5, 0xcc, n - 5);

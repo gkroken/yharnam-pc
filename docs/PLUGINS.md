@@ -61,7 +61,7 @@ lines). A plugin's own `log()` lines start `Plugin <name>:`.
 | `guest_addr`, `read`, `write`, `patch` | Yes. See the notes below the table. |
 | `on_frame` | Yes. On the game's main thread, once a frame, right after its frame-time manager's update. |
 | `hook`, `hook2` | Yes, from `bb_plugin_image` only (see below). |
-| `call_guest` | Yes, from the game's main thread only (`on_frame`, or a hook running there), and only to an address in the image's code. |
+| `call_guest` | Yes, once the game runs (not during `bb_plugin_image`, before its own start), from its main thread only (`on_frame`, or a hook running there), and only to an address in the image's code. It sets `al` for a variadic callee. |
 | `register_hle` | No: this port's system functions are its own runtime. Returns 1 and logs it. |
 | `visitor` | Always 0: this host never loads a plugin as a visitor. |
 | Everything else | Not yet. Each returns the failure value its comment in the header gives (1, 0, NULL or -1) and logs once that it is missing. |
@@ -86,8 +86,24 @@ lines). A plugin's own `log()` lines start `Plugin <name>:`.
   - It can't tell where instructions end, or whether one is RIP-relative. That stays the
     plugin's job, as on bbhost.
   - With `prologue` NULL (`hook2`), the bytes there are taken as they are, but never when they
-    start with a jump or call. That would be another hook (the port's own), and copying it
-    would send execution elsewhere.
+    start with a jump or call: rel32 (`E9`/`E8`), or through rip (`FF 25`/`FF 15`). Copying
+    one into the stub would send execution elsewhere.
+- **Bytes already rewritten:** a hook is refused (2) whatever its prologue argument, if any of
+  its bytes were rewritten by:
+  - any of the port's own hooks (entry, call-site, mid-function, skip or store) or patches;
+  - another plugin's hook at a different address;
+  - a `patch()` call.
+
+  Hooking over them would cut that jump in half or copy a moved one. A second hook at exactly
+  the same address joins the chain instead (below).
+
+  Some rewrites aren't recorded, so for those only the prologue check protects a hook (when a
+  prologue is given):
+  - the community patches applied as the image loads (`patches/Bloodborne.xml`);
+  - Hunter's Atlas lamp travel (opt-in, `BB_MAP_TRAVEL_ENABLED=1`). It writes a `jmp [rip]`
+    over the first 17 bytes of SprjFlipper::Update (BN `0x2434770`) before plugins load. With
+    it on, a plugin's hook there is refused: the bytes differ, or the `FF 25` guard catches a
+    NULL prologue.
 - **What the callback can do:** each `hook2` callback gets a `BbHookCtx`, and may rewrite
   arguments and the low halves of `xmm0`-`xmm7`.
   - Returning nonzero skips the function. Its caller gets `ctx->ret` in `rax`, and in `xmm0`'s
@@ -98,8 +114,6 @@ lines). A plugin's own `log()` lines start `Plugin <name>:`.
   - Each callback sees the arguments the one before it left. The first that skips decides, and
     the rest don't run.
   - A later hook must give the same length as the first, and the same original bytes.
-  - A function the port itself already hooks starts with a jump, so a plugin's hook there is
-    refused.
 - **If a plugin fails its start** after hooking, its callbacks are dropped. The stub stays in the
   code and runs the rest of the chain.
 - **Callbacks run on whatever thread calls the function, on that thread's stack.** Game threads'

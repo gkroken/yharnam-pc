@@ -43,6 +43,13 @@ static void on_frame(void *user) {
     ++g_frames;
 }
 
+#if VARIANT == 1 || VARIANT == 2
+static int noop2(BbHookCtx *ctx, void *user) {
+    (void)ctx, (void)user;
+    return 0;
+}
+#endif
+
 #if VARIANT == 1
 #define NAME "good"
 #elif VARIANT == 2
@@ -134,6 +141,8 @@ BB_PLUGIN_EXPORT int bb_plugin_image(const BbHostApi *api) {
     g_results[31] = api->write(api->guest_addr(0x400020), &value, sizeof value); /* 1: code, by runtime address */
     g_results[32] = api->write(0x400000 + 0x7ffe, &value, sizeof value);  /* 1: straddles code and data */
     g_results[33] = strcmp(api->eboot_sha256(), "00ff00ff") == 0;
+    /* Not the 1.09 build: no hook (port-1840f95-F2). Only tried then, so 1.09 runs place none. */
+    g_results[36] = api->eboot_is_109() ? -1 : api->hook2(0x400000 + 0x1000, NULL, 5, noop2, 0);
     /* The test marks a second code range at 0xa000: a write from data into it (port-cd2a2bf-N1). */
     g_results[34] = api->write(0x400000 + 0x9ffe, &value, sizeof value);  /* 1: data running into code */
     g_results[35] = api->write(0x400000 + 0x9ff8, &value, sizeof value);  /* 0: ends just before it */

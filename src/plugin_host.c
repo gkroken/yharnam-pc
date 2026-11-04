@@ -310,6 +310,7 @@ static int api_patch(uint64_t bn, const void *expect, const void *bytes, size_t 
     if (!VirtualProtect(at, n, PAGE_EXECUTE_READWRITE, &old)) return 2;
     memcpy(at, bytes, n);
     VirtualProtect(at, n, old, &old);
+    bb_image_rewritten(bn - BN_BASE, n);
     FlushInstructionCache(GetCurrentProcess(), at, n);
     return 0;
 }
@@ -443,7 +444,7 @@ static int place_hook(const char *what, uint64_t bn, const void *prologue, size_
     const int result = bb_plugin_hook(bn - BN_BASE, prologue, n, fn, fn2, user, t_current);
     if (result) api_log("%s(0x%llx, %zu bytes): %s", what, (unsigned long long)bn, n,
                         result == 1 ? "not placed: the bytes there are not the prologue given"
-                                    : "not placed: no room, or another hook there with another length");
+                                    : "not placed: another hook or patch rewrote some of these bytes, or no room");
     return result;
 }
 
@@ -458,7 +459,13 @@ static int api_hook2(uint64_t bn, const void *prologue, size_t n, BbHookFn2 fn, 
 }
 
 static int api_call_guest(uint64_t bn, BbCallRegs *regs) {
-    if (g_phase < PHASE_IMAGE || !eboot_is_109() || !regs) return 1;
+    if (!eboot_is_109() || !regs) return 1;
+    if (g_phase != PHASE_RUNNING) {
+        /* During bb_plugin_image the game's own start (module initializers, the network) has not
+         * run: most of its functions would meet unbuilt state. */
+        api_log("call_guest(0x%llx): only once the game runs (on_frame, or a hook)", (unsigned long long)bn);
+        return 1;
+    }
     unsigned char *at = image_at(bn, 1);
     if (!at || !bb_image_is_code((uint64_t)(at - (unsigned char *)bb_guest(0)), 1)) return 1;
     if (GetCurrentThreadId() != g_main_thread) {

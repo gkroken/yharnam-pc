@@ -5,6 +5,9 @@
  *               call_guest and a late hook2 on request
  *   2 hooker2   joins sum's chain: sees what hooker left; a different length is refused
  *   3 hookfail  hooks sum, then fails bb_plugin_image: its callback must never run
+ * Also (port-1840f95): chain and chain2 (hooker sets a value and runs on; next in each chain,
+ * hooker2's v1 skip on chain and its hook2 skip on chain2, each straight after it), over (hooker2's NULL-prologue hook inside hooker's jump: refused), patched (a range
+ * the test rewrote with bb_patch: refused), al (rax survives the stub; call_guest sets al).
  * The functions are the test's, written into its fake image at the offsets below. */
 #include "bbhost_plugin.h"
 
@@ -15,7 +18,8 @@
 #endif
 
 #define BN(offset) (0x400000ull + (offset))
-enum { SUM = 0x1000, FADD = 0x1100, MUL = 0x1200, ARG7 = 0x1300, JUMPS = 0x1400, SUM_COPY = 0x1500 };
+enum { SUM = 0x1000, FADD = 0x1100, MUL = 0x1200, ARG7 = 0x1300, JUMPS = 0x1400, SUM_COPY = 0x1500,
+       CHAIN = 0x1600, OVER = 0x1700, PATCHED = 0x1800, AL = 0x1900, CHAIN2 = 0x1a00, RIPJUMP = 0x1b00 };
 static const unsigned char sum_prologue[8] = {0x55, 0x48, 0x89, 0xe5, 0x48, 0x8d, 0x04, 0x77};
 static const unsigned char mul_prologue[7] __attribute__((unused)) = {0x55, 0x48, 0x89, 0xe5, 0x48, 0x89, 0xf8};
 
@@ -66,11 +70,18 @@ static int on_mul(const BbHookFrame *frame, void *user) {
     g_results[12] = (long long)frame->rsi;
     return frame->rdi == 13;
 }
+/* chain(a, b) = a + 2b: a == 21 or 22 sets a return value and runs on (hooker2 decides). */
+static int on_chain(BbHookCtx *ctx, void *user) {
+    (void)user;
+    if (ctx->arg[0] == 21) ctx->ret = 55;
+    if (ctx->arg[0] == 22) ctx->ret = 66;
+    return 0;
+}
 BB_PLUGIN_EXPORT int hooker_late_hook(void) {
     return g_api->hook2(BN(ARG7), NULL, 5, on_sum, 0);
 }
 /* call_guest, as a plugin would make it from on_frame; the results into out. */
-BB_PLUGIN_EXPORT int hooker_call(long long out[4]) {
+BB_PLUGIN_EXPORT int hooker_call(long long out[5]) {
     BbCallRegs r;
     memset(&r, 0, sizeof r);
     r.arg[0] = 3;
@@ -88,10 +99,23 @@ BB_PLUGIN_EXPORT int hooker_call(long long out[4]) {
     out[2] = (long long)r.ret;  /* the 7th integer argument: 42 */
     memset(&r, 0, sizeof r);
     out[3] = g_api->call_guest(BN(0x9000), &r);  /* data, not code: 1 */
-    return a | b | c;
+    memset(&r, 0, sizeof r);
+    const int d = g_api->call_guest(BN(AL), &r);
+    out[4] = (long long)r.ret;  /* al as call_guest set it: 8 */
+    return a | b | c | d;
 }
 #elif VARIANT == 2
 #define NAME "hooker2"
+/* On chain, after hooker: a == 21 skips through the v1 frame (the caller must get 0, not 55). */
+static int on_chain_v1(const BbHookFrame *frame, void *user) {
+    (void)user;
+    return frame->rdi == 21;
+}
+/* ...and a == 22 skips without setting a value (the caller must get 0, not hooker's 66). */
+static int on_chain2(BbHookCtx *ctx, void *user) {
+    (void)user;
+    return ctx->arg[0] == 22;
+}
 static int on_sum2(BbHookCtx *ctx, void *user) {
     (void)user;
     ++g_results[10];
@@ -126,8 +150,16 @@ BB_PLUGIN_EXPORT int bb_plugin_image(const BbHostApi *api) {
     g_results[3] = api->hook2(BN(ARG7), wrong, 5, on_sum, 0);            /* 1: bytes differ */
     g_results[4] = api->hook2(BN(SUM_COPY), sum_prologue, 4, on_sum, 0); /* 1: under 5 bytes (they match) */
     g_results[7] = api->hook2(BN(JUMPS), NULL, 5, on_sum, 0);            /* 1: the bytes there are a jmp */
+    g_results[16] = api->hook2(BN(RIPJUMP), NULL, 14, on_sum, 0);        /* 1: a jmp [rip] (Atlas's kind) */
     g_results[5] = api->hook2(BN(0x200000), sum_prologue, 8, on_sum, 0); /* 1: outside the image */
     g_results[6] = api->hook(BN(MUL), mul_prologue, 7, 0, 0);            /* 1: no callback */
+    g_results[8] = api->hook2(BN(CHAIN), sum_prologue, 8, on_chain, 0);  /* 0 */
+    g_results[15] = api->hook2(BN(CHAIN2), sum_prologue, 8, on_chain, 0); /* 0 */
+    g_results[9] = api->hook2(BN(OVER), sum_prologue, 8, noop2, 0);      /* 0 */
+    g_results[13] = api->hook2(BN(AL), NULL, 5, noop2, 0);               /* 0: movzx eax, al; nop; nop */
+    BbCallRegs r;
+    memset(&r, 0, sizeof r);
+    g_results[14] = api->call_guest(BN(ARG7), &r);                       /* 1: the game has not started */
     return 0;
 #elif VARIANT == 2
     g_results[0] = api->hook2(BN(SUM), sum_prologue, 8, on_sum2, 0);     /* 0: joins the chain */
@@ -135,6 +167,10 @@ BB_PLUGIN_EXPORT int bb_plugin_image(const BbHostApi *api) {
     g_results[2] = api->hook2(BN(SUM), mul_prologue, 7, on_sum2, 0);     /* 2: another length */
     static const unsigned char not_sum[8] = {0x55, 0x48, 0x89, 0xe5, 0x90, 0x90, 0x90, 0x90};
     g_results[3] = api->hook2(BN(SUM), not_sum, 8, on_sum2, 0);          /* 1: not the original */
+    g_results[4] = api->hook(BN(CHAIN), sum_prologue, 8, on_chain_v1, 0); /* 0: joins the chain */
+    g_results[5] = api->hook2(BN(CHAIN2), sum_prologue, 8, on_chain2, 0); /* 0: joins chain2's chain */
+    g_results[6] = api->hook2(BN(OVER + 3), NULL, 5, on_sum2, 0);         /* 2: inside hooker's jump */
+    g_results[7] = api->hook2(BN(PATCHED), NULL, 8, on_sum2, 0);          /* 2: over rewritten bytes */
     return 0;
 #else
     g_results[0] = api->hook2(BN(SUM), sum_prologue, 8, on_fail, 0);

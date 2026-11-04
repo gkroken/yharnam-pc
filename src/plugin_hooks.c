@@ -167,11 +167,19 @@ int bb_plugin_hook(uint64_t offset, const void *prologue, size_t n, BbHookFn fn,
         /* Hooked already, by a plugin: join the chain, checked against the original bytes. */
         if (n != g_sites[site].n) return 2;
         if (prologue && memcmp(prologue, g_sites[site].original, n)) return 1;
+    } else if (bb_image_is_rewritten(offset, n)) {
+        /* Another hook or a patch rewrote some of these bytes (the port's own, another plugin's
+         * at a nearby offset, a patch()): hooking over it would cut its jump or copy a moved
+         * one. Whatever the prologue argument says. */
+        return 2;
     } else {
         if (prologue && memcmp(image + offset, prologue, n)) return 1;
-        /* Taking the bytes as they are: never a jump or call another hook left there (the port's
-         * own engine hooks), which would point elsewhere once copied into the stub. */
-        if (!prologue && (image[offset] == 0xe9 || image[offset] == 0xe8)) return 1;
+        /* Taking the bytes as they are: never a jump or call another hook left there, which would
+         * point elsewhere once copied into the stub: rel32 (E9/E8, the engine hooks') or through
+         * rip (FF 25 / FF 15: Hunter's Atlas lamp travel writes one at the frame manager's entry
+         * before plugins load, runtime_atlas_state.c, and it records no range). */
+        const unsigned char *b = image + offset;
+        if (!prologue && (b[0] == 0xe9 || b[0] == 0xe8 || (b[0] == 0xff && (b[1] == 0x25 || b[1] == 0x15)))) return 1;
         if (g_site_count == MAX_SITES) return 2;
         site = g_site_count;
         g_sites[site].offset = offset;
@@ -186,6 +194,7 @@ int bb_plugin_hook(uint64_t offset, const void *prologue, size_t n, BbHookFn fn,
         at[0] = 0xe9;
         put_rel32(at + 1, at + 5, stub);
         memset(at + 5, 0xcc, n - 5);  /* never run: the stub continues after them */
+        bb_image_rewritten(offset, n);
         ++g_site_count;
     }
     g_entries[g_entry_count++] = (Entry){site, owner, 1, fn, fn2, user};
@@ -209,9 +218,9 @@ typedef struct {
     double xmm0;  /* System V returns {INTEGER, SSE} in rax and xmm0 */
 } GuestResult;
 
-typedef BB_GUEST_ABI GuestResult (*GuestFn)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, double,
-                                            double, double, double, double, double, double, double, uint64_t,
-                                            uint64_t, uint64_t, uint64_t);
+/* Variadic, so the compiler sets al to the number of vector registers used (8), as System V
+ * wants for a variadic callee; the arguments land where they would without the "...". */
+typedef BB_GUEST_ABI GuestResult (*GuestFn)(uint64_t, ...);
 
 static double as_double(uint64_t bits) {
     double d;
