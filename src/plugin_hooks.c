@@ -139,7 +139,9 @@ static unsigned char *build_stub(int site_index, unsigned char *site, size_t n) 
     for (int i = 0; i < 7; ++i) p = gpr_frame(p, FRAME_REGS[i], FRAME_GPR + 8 * i, 0);
     for (int x = 0; x < 8; ++x) p = xmm_frame(p, x, FRAME_XMM + 16 * x, 0);
     p = emit(p, add, sizeof add);
-    p = emit(p, g_sites[site_index].original, n);                    /* the displaced prologue */
+    unsigned char *copy = p;
+    p = emit(p, g_sites[site_index].original, n);                    /* the displaced prologue, */
+    bb_hook_fix_tcb(copy, n);                                         /* its TCB loads rewritten */
     *p++ = 0xe9;                                                      /* jmp site + n */
     put_rel32(p, p + 4, site + n);
     p += 4;
@@ -188,6 +190,11 @@ int bb_plugin_hook(uint64_t offset, const void *prologue, size_t n, BbHookFn fn,
     }
     if (g_entry_count == MAX_ENTRIES) return 2;
     if (site == g_site_count) {
+        /* The prologue's TCB loads get the displacement the image's own get later (probe.c):
+         * refused when that is unknown or a load is cut off. port-aedd07c-F1. */
+        unsigned char check[MAX_PROLOGUE];
+        memcpy(check, g_sites[site].original, n);
+        if (bb_hook_fix_tcb(check, n) < 0) return 2;
         unsigned char *stub = build_stub(site, image + offset, n);
         if (!stub) return 2;
         unsigned char *at = image + offset;

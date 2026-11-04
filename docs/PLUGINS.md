@@ -88,6 +88,15 @@ lines). A plugin's own `log()` lines start `Plugin <name>:`.
   - With `prologue` NULL (`hook2`), the bytes there are taken as they are, but never when they
     start with a jump or call: rel32 (`E9`/`E8`), or through rip (`FF 25`/`FF 15`). Copying
     one into the stub would send execution elsewhere.
+- **The image in memory isn't `eboot.elf`:** the game reads its thread block with
+  `mov rax, fs:[0]` in the ELF (`64 48 8b 04 25 …`). The port rewrites it to
+  `mov rax, gs:[0]` (`65 …`), which is about 17,000 loads, 3,500 of them near a function's
+  entry. A prologue copied from a disassembly of `eboot.elf` then doesn't match, and the hook
+  returns 1.
+  - Take the bytes from memory instead: `read()` them in `bb_plugin_image`.
+  - Or pass a NULL prologue.
+  - The host gives the stub's copy of such a load the same thread-block displacement the
+    image's own loads get. A prologue that cuts a load off is refused (2).
 - **Bytes already rewritten:** a hook is refused (2) whatever its prologue argument, if any of
   its bytes were rewritten by:
   - any of the port's own hooks (entry, call-site, mid-function, skip or store) or patches;
@@ -100,6 +109,8 @@ lines). A plugin's own `log()` lines start `Plugin <name>:`.
   Some rewrites aren't recorded, so for those only the prologue check protects a hook (when a
   prologue is given):
   - the community patches applied as the image loads (`patches/Bloodborne.xml`);
+  - the thread-block loads (above), which are rewritten after plugins hook, so a hook's stub
+    gets its own rewrite;
   - Hunter's Atlas lamp travel (opt-in, `BB_MAP_TRAVEL_ENABLED=1`). It writes a `jmp [rip]`
     over the first 17 bytes of SprjFlipper::Update (BN `0x2434770`) before plugins load. With
     it on, a plugin's hook there is refused: the bytes differ, or the `FF 25` guard catches a

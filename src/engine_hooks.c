@@ -139,6 +139,32 @@ static unsigned char *stub(size_t size) {
     return at;
 }
 
+static uint32_t g_tcb_displacement;
+static int g_tcb_known;
+
+void bb_hooks_set_tcb_displacement(uint32_t displacement) {
+    g_tcb_displacement = displacement;
+    g_tcb_known = 1;
+}
+
+int bb_hook_fix_tcb(unsigned char *copy, size_t n) {
+    static const unsigned char load[] = {0x65, 0x48, 0x8b, 0x04, 0x25, 0, 0, 0, 0};
+    int fixed = 0;
+    for (size_t i = 0; i < n; ++i) {
+        const size_t have = n - i < sizeof load ? n - i : sizeof load;
+        /* At least gs + REX.W + mov (65 48 8b): a lone 0x65 or 65 48 at the end is likelier part
+         * of an immediate than the start of a load. */
+        if (have < 3 || memcmp(copy + i, load, have < 5 ? have : 5)) continue;
+        if (have < sizeof load) return -1;  /* a load the copy's end cuts off */
+        if (memcmp(copy + i + 5, load + 5, 4)) continue;  /* already has a displacement */
+        if (!g_tcb_known) return -1;
+        memcpy(copy + i + 5, &g_tcb_displacement, 4);
+        ++fixed;
+        i += sizeof load - 1;
+    }
+    return fixed;
+}
+
 unsigned char *bb_hook_code(size_t n) {
     unsigned char *at = stub(n);
     if (!at) refuse("no stub space (not initialised, sealed or full)");

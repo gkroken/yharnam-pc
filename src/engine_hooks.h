@@ -47,6 +47,14 @@ int bb_image_is_code(uint64_t offset, size_t n);
  * the plugin host records its hooks and patch() calls): a later hook overlapping one is refused. */
 void bb_image_rewritten(uint64_t offset, size_t n);
 int bb_image_is_rewritten(uint64_t offset, size_t n);
+/* The guest reads its TCB with `mov rax, gs:[0]` (65 48 8b 04 25 00000000); probe.c gives each
+ * such load in the image the TEB TLS slot's displacement, but only after bb_engine_install. Code
+ * copied out of the image before that (a plugin hook's displaced prologue) needs the same
+ * rewrite: probe.c sets the displacement here first, and bb_hook_fix_tcb applies it to a copy.
+ * Returns the loads rewritten, or -1 when the copy holds one and no displacement was set, or
+ * holds one cut off by its end (not whole instructions). */
+void bb_hooks_set_tcb_displacement(uint32_t displacement);
+int bb_hook_fix_tcb(unsigned char *copy, size_t n);
 /* n bytes of stub code within rel32 reach of the image (16-byte aligned, filled with int3), for
  * hooks built outside this file (plugin_hooks.c). NULL once sealed or when full. */
 unsigned char *bb_hook_code(size_t n);

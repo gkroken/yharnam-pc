@@ -19,7 +19,8 @@
 
 #define BN(offset) (0x400000ull + (offset))
 enum { SUM = 0x1000, FADD = 0x1100, MUL = 0x1200, ARG7 = 0x1300, JUMPS = 0x1400, SUM_COPY = 0x1500,
-       CHAIN = 0x1600, OVER = 0x1700, PATCHED = 0x1800, AL = 0x1900, CHAIN2 = 0x1a00, RIPJUMP = 0x1b00 };
+       CHAIN = 0x1600, OVER = 0x1700, PATCHED = 0x1800, AL = 0x1900, CHAIN2 = 0x1a00, RIPJUMP = 0x1b00,
+       TCB = 0x1c00, TCB_CUT = 0x1d00, PATCHED2 = 0x1e00, SKIPPED = 0x1f00, TCB_EARLY = 0x2000 };
 static const unsigned char sum_prologue[8] = {0x55, 0x48, 0x89, 0xe5, 0x48, 0x8d, 0x04, 0x77};
 static const unsigned char mul_prologue[7] __attribute__((unused)) = {0x55, 0x48, 0x89, 0xe5, 0x48, 0x89, 0xf8};
 
@@ -151,6 +152,10 @@ BB_PLUGIN_EXPORT int bb_plugin_image(const BbHostApi *api) {
     g_results[4] = api->hook2(BN(SUM_COPY), sum_prologue, 4, on_sum, 0); /* 1: under 5 bytes (they match) */
     g_results[7] = api->hook2(BN(JUMPS), NULL, 5, on_sum, 0);            /* 1: the bytes there are a jmp */
     g_results[16] = api->hook2(BN(RIPJUMP), NULL, 14, on_sum, 0);        /* 1: a jmp [rip] (Atlas's kind) */
+    g_results[17] = api->hook2(BN(TCB), NULL, 13, noop2, 0);             /* 0: the stub's TCB load rewritten */
+    g_results[18] = api->hook2(BN(TCB_CUT), NULL, 8, noop2, 0);          /* 2: cuts the TCB load */
+    static const unsigned char lea[4] = {0x48, 0x8d, 0x04, 0x77};
+    g_results[19] = api->patch(BN(PATCHED2 + 4), lea, lea, 4);           /* 0: patched (with itself) */
     g_results[5] = api->hook2(BN(0x200000), sum_prologue, 8, on_sum, 0); /* 1: outside the image */
     g_results[6] = api->hook(BN(MUL), mul_prologue, 7, 0, 0);            /* 1: no callback */
     g_results[8] = api->hook2(BN(CHAIN), sum_prologue, 8, on_chain, 0);  /* 0 */
@@ -171,6 +176,8 @@ BB_PLUGIN_EXPORT int bb_plugin_image(const BbHostApi *api) {
     g_results[5] = api->hook2(BN(CHAIN2), sum_prologue, 8, on_chain2, 0); /* 0: joins chain2's chain */
     g_results[6] = api->hook2(BN(OVER + 3), NULL, 5, on_sum2, 0);         /* 2: inside hooker's jump */
     g_results[7] = api->hook2(BN(PATCHED), NULL, 8, on_sum2, 0);          /* 2: over rewritten bytes */
+    g_results[8] = api->hook2(BN(PATCHED2), NULL, 8, on_sum2, 0);         /* 2: over hooker's patch() */
+    g_results[9] = api->hook2(BN(SKIPPED), NULL, 8, on_sum2, 0);          /* 2: over an engine skip site */
     return 0;
 #else
     g_results[0] = api->hook2(BN(SUM), sum_prologue, 8, on_fail, 0);

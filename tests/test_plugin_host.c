@@ -21,7 +21,8 @@ typedef double (BB_GUEST_ABI *VecFn)(double, double);
 
 /* Scenario 6's functions, at the offsets tests/plugins/hook_plugin.c hooks. */
 enum { SUM = 0x1000, FADD = 0x1100, MUL = 0x1200, ARG7 = 0x1300, JUMPS = 0x1400, SUM_COPY = 0x1500,
-       CHAIN = 0x1600, OVER = 0x1700, PATCHED = 0x1800, AL = 0x1900, CHAIN2 = 0x1a00, RIPJUMP = 0x1b00 };
+       CHAIN = 0x1600, OVER = 0x1700, PATCHED = 0x1800, AL = 0x1900, CHAIN2 = 0x1a00, RIPJUMP = 0x1b00,
+       TCB = 0x1c00, TCB_CUT = 0x1d00, PATCHED2 = 0x1e00, SKIPPED = 0x1f00, TCB_EARLY = 0x2000 };
 /* sum(a, b) = a + 2b: push rbp; mov rbp, rsp; lea rax, [rdi+rsi*2]; pop rbp; ret */
 static const unsigned char sum_code[] = {0x55, 0x48, 0x89, 0xe5, 0x48, 0x8d, 0x04, 0x77, 0x5d, 0xc3};
 /* fadd(x, y) = x + y: addsd xmm0, xmm1; ret (the whole function is the displaced prologue) */
@@ -34,6 +35,10 @@ static const unsigned char arg7_code[] = {0x48, 0x8b, 0x44, 0x24, 0x08, 0xc3};
  * nop; ret. Hooked, it shows whether the stub gives rax back. */
 static const unsigned char al_code[] = {0x0f, 0xb6, 0xc0, 0x90, 0x90, 0xc3};
 typedef int64_t (BB_GUEST_ABI *VarFn)(int64_t, ...);
+/* tcb() = the guest TCB pointer as the game reads it: push rbp; mov rbp, rsp; mov rax, gs:[0];
+ * pop rbp; ret. The 0 displacement is what probe.c's patch_tcb_loads later fills in. */
+static const unsigned char tcb_code[] = {0x55, 0x48, 0x89, 0xe5, 0x65, 0x48, 0x8b, 0x04, 0x25, 0, 0, 0, 0, 0x5d, 0xc3};
+typedef uint64_t (BB_GUEST_ABI *TcbFn)(void);
 
 static long long call_result[5];
 static int call_status = -1;
@@ -120,6 +125,9 @@ int main(void) {
     bb_image_code(0, 0x8000);       /* the fake image's "text segment" */
     bb_image_code(0xa000, 0x1000);  /* and a second one, after data */
 
+    /* Written now: scenario 1 already tries a hook over a TCB load (refused, no displacement yet). */
+    memcpy(image + TCB_EARLY, tcb_code, sizeof tcb_code);
+
     /* 1. Everything in its default state. */
     write_ini(user, "");
     CHECK(bb_plugins_install() == 2);  /* good_b (folder B's good.dll) and gameplay */
@@ -157,6 +165,7 @@ int main(void) {
     CHECK(r[30] == 0);                                           /* patch: already patched is done */
     CHECK(r[33] == 1);                                           /* eboot_sha256 from the image phase */
     CHECK(r[36] == -1);                                          /* 1.09: the non-1.09 hook was not tried */
+    CHECK(r[37] == 2 && image[TCB_EARLY] == 0x55);               /* TCB load, displacement unknown: refused */
     CHECK(r[34] == 1 && r[35] == 0);                             /* write: data into code refused */
     char dir[MAX_PATH];
     snprintf(dir, sizeof dir, "%s\\plugins\\good_b", user);
@@ -235,6 +244,18 @@ int main(void) {
     /* bytes 4-7 rewritten (with themselves) as one of the port's own patches or mid-hooks would:
      * a plugin hook over them must be refused even with a NULL prologue */
     CHECK(bb_patch(PATCHED + 4, sum_code + 4, sum_code + 4, 4) == 0);
+    memcpy(image + TCB, tcb_code, sizeof tcb_code);
+    memcpy(image + TCB_CUT, tcb_code, sizeof tcb_code);
+    memcpy(image + PATCHED2, sum_code, sizeof sum_code);
+    memcpy(image + SKIPPED, sum_code, sizeof sum_code);
+    /* An engine skip site over sum's lea; pop rbp (a mid-hook, recorded through divert). */
+    const BbCode lea_pop = {5, bb_code_hash(sum_code + 4, 5)};
+    CHECK(bb_hook_skip(SKIPPED + 4, lea_pop) != NULL);
+    /* The guest TCB in a real TEB TLS slot, as runtime_thread.c keeps it: gs:[0x1480 + 8 * slot]. */
+    const DWORD slot = TlsAlloc();
+    CHECK(slot < 64);
+    TlsSetValue(slot, (void *)(uintptr_t)0x7e57c0de);
+    bb_hooks_set_tcb_displacement(0x1480 + 8 * slot);
     /* jmp rel32 to sum: what a hook another tool placed looks like */
     image[JUMPS] = 0xe9;
     const int32_t to_sum = SUM - (JUMPS + 5);
@@ -263,6 +284,8 @@ int main(void) {
     CHECK(h2[4] == 0 && h2[5] == 0);                   /* v1 joined chain's, hook2 chain2's */
     CHECK(h2[6] == 2 && h2[7] == 2);                   /* inside another hook, over a patch: refused */
     CHECK(image[PATCHED] == 0x55);                     /* the refused hook left the code alone */
+    CHECK(h1[17] == 0 && h1[18] == 2 && h1[19] == 0);  /* TCB hooked; the cut refused; patch() */
+    CHECK(h2[8] == 2 && h2[9] == 2);                   /* over a plugin's patch(), over a skip site */
     CHECK(image[SUM] == 0xe9 && image[SUM + 5] == 0xcc);  /* jmp to the stub, the rest never run */
     bb_hooks_seal();  /* the stubs become executable; no hook can be placed after this */
 
@@ -287,6 +310,9 @@ int main(void) {
     CHECK(chain2(22, 1) == 0);                       /* hooker set 66; hooker2's hook2 skip starts at 0 */
     CHECK(chain2(1, 1) == 3);
     CHECK(over(2, 3) == 8);                          /* the refused overlap left hooker's hook working */
+    /* The hooked function's TCB load reads the slot, through the stub's rewritten copy. */
+    TcbFn tcb = (TcbFn)(void *)(image + TCB);
+    CHECK(tcb() == 0x7e57c0de);
     VarFn al = (VarFn)(void *)(image + AL);
     CHECK(al(0, 1.0, 2.0, 3.0) == 3);                /* three vector registers: al 3, through the stub */
 

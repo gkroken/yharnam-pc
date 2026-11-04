@@ -738,6 +738,9 @@ int main(int argc, char **argv) {
         else {
             for (uint64_t i = 0; i < ns; ++i)  /* plugin_host.c: write() keeps out of code */
                 if (segments[i].flags & 1) bb_image_code(segments[i].address, segments[i].size);
+            /* Plugin hooks copy prologues before patch_tcb_loads runs (below): they rewrite their
+             * copies' TCB loads with the same displacement. */
+            bb_hooks_set_tcb_displacement(runtime_thread_tcb_offset());
             printf("Engine hooks: %d installed\n", bb_engine_install());
             bbgpu_set_frame_callback(bb_engine_frame);
         }
