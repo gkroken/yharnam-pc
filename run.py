@@ -576,6 +576,13 @@ def main():
             patched = False
             print('Game files: eboot.bin is not the 01.09 build the community patches were made for; '
                   '30 FPS, no effect patches')
+        # Native plugins (src/plugin_host.c): their address-based calls work only on the 1.09 build,
+        # the same test as the community patches' (forcing patches does not make it 1.09).
+        import hashlib
+        elf = (out / 'eboot.elf').read_bytes()
+        env['BB_EBOOT_SHA256'] = hashlib.sha256(elf).hexdigest()
+        env['BB_EBOOT_109'] = '1' if version in (None, '01.09') and eboot_matches_patches(out / 'eboot.elf') else '0'
+        del elf
         fps = env.get('BB_FPS', 'uncap') if patched else '30'
         scaled_render = scaled_output = None
         if not env.get('BB_RENDER_RES'):

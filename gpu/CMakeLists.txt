@@ -299,12 +299,12 @@ if (WIN32)
     set_target_properties(atrac9 PROPERTIES C_STANDARD 99 INTERPROCEDURAL_OPTIMIZATION OFF)
     add_executable(bb-probe ../src/probe.c ${BB_RUNTIME} ../src/compat_win.c ../src/vulkan_smoke.c ../src/cloth_rate.c
         ../src/engine_hooks.c ../src/engine_features.c ../src/pc_menu.c ../src/rebirth.c ../src/ending_trace.c ../src/input_bindings.c ../src/mouse_camera.c ../src/key_prompts.c ../src/menu_pointer.c
-        ../src/occlusion_queries.c ../src/wind_pace.c ../src/blur_kernel.c ../src/render_jobs.c ../src/effect_step_gate.c ../src/effect_smooth_steps.c ../src/light_blink.c ../src/water_gate.c ../src/frame_time.c ../packaging/windows/bb-probe.rc)
+        ../src/occlusion_queries.c ../src/wind_pace.c ../src/blur_kernel.c ../src/render_jobs.c ../src/effect_step_gate.c ../src/effect_smooth_steps.c ../src/light_blink.c ../src/water_gate.c ../src/frame_time.c ../src/plugin_host.c ../packaging/windows/bb-probe.rc)
     target_sources(bb-probe PRIVATE ../src/aspect_ratio.cpp)
     target_compile_definitions(bb-probe PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
     set_target_properties(bb-probe PROPERTIES C_STANDARD 11 C_EXTENSIONS OFF)
     target_compile_options(bb-probe PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Werror>)
-    target_include_directories(bb-probe PRIVATE .. ../src)
+    target_include_directories(bb-probe PRIVATE .. ../src ../include)
     target_link_libraries(bb-probe PRIVATE bbgpu atrac9 onecore bcrypt ws2_32 -pthread)
     # The PS4 range (64 GiB - 1 TiB) must stay free: no high-entropy ASLR for heaps and stacks.
     # The guest main thread runs on the process stack: 16 MiB, committed (no stack probes).
@@ -350,6 +350,31 @@ if (WIN32)
     add_executable(engine-hooks-test EXCLUDE_FROM_ALL ../tests/test_engine_hooks.c ../src/engine_hooks.c)
     target_include_directories(engine-hooks-test PRIVATE ../src)
     target_compile_options(engine-hooks-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+    # The plugin host (src/plugin_host.c) against test plugins in two folders: one source,
+    # built once per variant (tests/plugins/test_plugin.c); folder b's good.dll replaces a's.
+    set(BB_TEST_PLUGINS_A ${CMAKE_BINARY_DIR}/test-plugins/a)
+    set(BB_TEST_PLUGINS_B ${CMAKE_BINARY_DIR}/test-plugins/b)
+    add_executable(plugin-host-test EXCLUDE_FROM_ALL ../tests/test_plugin_host.c ../src/plugin_host.c
+        ../src/engine_hooks.c)
+    target_include_directories(plugin-host-test PRIVATE ../src ../include)
+    target_compile_options(plugin-host-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+    target_compile_definitions(plugin-host-test PRIVATE WIN32_LEAN_AND_MEAN
+        PLUGIN_DIR_A="${BB_TEST_PLUGINS_A}" PLUGIN_DIR_B="${BB_TEST_PLUGINS_B}")
+    foreach(variant IN ITEMS 1:good:a 2:good:b 3:fails:a 4:initfail:a 5:notplugin:a 6:future:a 7:optin:a 8:gameplay:a)
+        string(REPLACE ":" ";" parts ${variant})
+        list(GET parts 0 number)
+        list(GET parts 1 name)
+        list(GET parts 2 folder)
+        add_library(test-plugin-${number} SHARED EXCLUDE_FROM_ALL ../tests/plugins/test_plugin.c)
+        target_include_directories(test-plugin-${number} PRIVATE ../include)
+        target_compile_definitions(test-plugin-${number} PRIVATE VARIANT=${number})
+        target_compile_options(test-plugin-${number} PRIVATE -Wall -Wextra -Werror)
+        string(TOUPPER ${folder} upper)
+        set_target_properties(test-plugin-${number} PROPERTIES PREFIX "" OUTPUT_NAME ${name}
+            RUNTIME_OUTPUT_DIRECTORY ${BB_TEST_PLUGINS_${upper}}
+            ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/test-plugins/lib/${number})
+        add_dependencies(plugin-host-test test-plugin-${number})
+    endforeach()
     add_executable(wind-pace-test EXCLUDE_FROM_ALL ../tests/test_wind_pace.c ../src/engine_hooks.c)
     target_include_directories(wind-pace-test PRIVATE ../src)
     target_compile_options(wind-pace-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)

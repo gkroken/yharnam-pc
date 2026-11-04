@@ -33,6 +33,10 @@ int bb_hooks_enabled(void) {
 
 void *bb_guest(uint64_t offset) { return g_image ? g_image + offset : NULL; }
 
+size_t bb_image_size(void) { return g_image ? g_image_size : 0; }
+
+int bb_hooks_sealed(void) { return g_sealed; }
+
 static int reachable(const unsigned char *from, const unsigned char *to) {
     const int64_t distance = (int64_t)((uintptr_t)to - (uintptr_t)from);
     return distance > -(int64_t)REACH && distance < (int64_t)REACH;

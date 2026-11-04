@@ -14,6 +14,7 @@
 #include "mouse_camera.h"
 #include "occlusion_queries.h"
 #include "pc_menu.h"
+#include "plugin_host.h"
 #include "rebirth.h"
 #include "wind_pace.h"
 #include "render_jobs.h"
@@ -50,6 +51,8 @@ int bb_engine_install(void) {
     int hooks = 0;
     for (size_t i = 0; i < sizeof(installs) / sizeof(*installs); ++i)
         if (installs[i]) hooks += installs[i]();
+    /* Native plugins (plugin_host.c) after the port's own features, while hooks are still open. */
+    bb_plugins_install();
     /* The main-thread tick, when a feature registered one (bb_on_main_frame). */
     return hooks + bb_main_frame_install();
 }

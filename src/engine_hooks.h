@@ -34,6 +34,10 @@ int bb_hooks_init(unsigned char *image, size_t size);
 void bb_hooks_seal(void);
 /* Guest pointer of an image offset (to call a game function from a hook). */
 void *bb_guest(uint64_t offset);
+/* Size of the image bb_hooks_init was given (0 before it): the plugin host's address checks. */
+size_t bb_image_size(void);
+/* Whether bb_hooks_seal has run: no hooks can be added after it. */
+int bb_hooks_sealed(void);
 
 /* `at` holds `call rel32` (E8) or `jmp rel32` (E9) to `target`: sends it to `host` instead.
  * `host` has the callee's signature; it may call the original through bb_guest(target).

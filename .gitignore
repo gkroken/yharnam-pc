@@ -28,3 +28,5 @@ patches.json
 !launcher/bloodborne.png
 # Player mods folder for source runs (packages take the Xbox prompts from packaging/windows/mods)
 /mods/
+# Native plugins a player or developer drops in (src/plugin_host.c); the folder is theirs.
+/plugins/*.dll
