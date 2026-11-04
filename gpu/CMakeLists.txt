@@ -299,7 +299,7 @@ if (WIN32)
     set_target_properties(atrac9 PROPERTIES C_STANDARD 99 INTERPROCEDURAL_OPTIMIZATION OFF)
     add_executable(bb-probe ../src/probe.c ${BB_RUNTIME} ../src/compat_win.c ../src/vulkan_smoke.c ../src/cloth_rate.c
         ../src/engine_hooks.c ../src/engine_features.c ../src/pc_menu.c ../src/rebirth.c ../src/ending_trace.c ../src/input_bindings.c ../src/mouse_camera.c ../src/key_prompts.c ../src/menu_pointer.c
-        ../src/occlusion_queries.c ../src/wind_pace.c ../src/blur_kernel.c ../src/render_jobs.c ../src/effect_step_gate.c ../src/effect_smooth_steps.c ../src/light_blink.c ../src/water_gate.c ../src/frame_time.c ../src/plugin_host.c ../src/plugin_hooks.c ../packaging/windows/bb-probe.rc)
+        ../src/occlusion_queries.c ../src/wind_pace.c ../src/blur_kernel.c ../src/render_jobs.c ../src/effect_step_gate.c ../src/effect_smooth_steps.c ../src/light_blink.c ../src/water_gate.c ../src/frame_time.c ../src/plugin_host.c ../src/plugin_hooks.c ../src/plugin_game.c ../packaging/windows/bb-probe.rc)
     target_sources(bb-probe PRIVATE ../src/aspect_ratio.cpp)
     target_compile_definitions(bb-probe PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
     set_target_properties(bb-probe PROPERTIES C_STANDARD 11 C_EXTENSIONS OFF)
@@ -356,7 +356,14 @@ if (WIN32)
     set(BB_TEST_PLUGINS_B ${CMAKE_BINARY_DIR}/test-plugins/b)
     set(BB_TEST_PLUGINS_C ${CMAKE_BINARY_DIR}/test-plugins/c)
     add_executable(plugin-host-test EXCLUDE_FROM_ALL ../tests/test_plugin_host.c ../src/plugin_host.c
+        ../src/plugin_hooks.c ../src/plugin_game.c ../src/engine_hooks.c)
+    # The game's state (src/plugin_game.c) against fake game structures in an image big enough
+    # for the real addresses.
+    add_executable(game-state-test EXCLUDE_FROM_ALL ../tests/test_game_state.c ../src/plugin_game.c
         ../src/plugin_hooks.c ../src/engine_hooks.c)
+    target_include_directories(game-state-test PRIVATE ../src ../include)
+    target_compile_options(game-state-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+    target_compile_definitions(game-state-test PRIVATE WIN32_LEAN_AND_MEAN)
     target_include_directories(plugin-host-test PRIVATE ../src ../include)
     target_compile_options(plugin-host-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
     target_compile_definitions(plugin-host-test PRIVATE WIN32_LEAN_AND_MEAN

@@ -62,6 +62,9 @@ lines). A plugin's own `log()` lines start `Plugin <name>:`.
 | `on_frame` | Yes. On the game's main thread, once a frame, right after its frame-time manager's update. |
 | `hook`, `hook2` | Yes, from `bb_plugin_image` only (see below). |
 | `call_guest` | Yes, once the game runs (not during `bb_plugin_image`, before its own start), from its main thread only (`on_frame`, or a hook running there), and only to an address in the image's code. It sets `al` for a variadic callee. |
+| `event_flag_get`, `event_flag_set`, `on_event_flag` | Yes (`src/plugin_game.c`). See below. |
+| `player_stat_get`, `player_stat_set` | Yes, by bbhost's names: `hp`, `max_hp`, `stamina`, `max_stamina`, `vitality`, `endurance`, `strength`, `skill`, `bloodtinge`, `arcane`, `insight`, `level`, `echoes`, plus the save's counters `ng_cycle`, `coop_helps`, `invader_kills`, `true_deaths`, `deaths`, `play_time_ms`. At the title the record already exists and reads 0s, as on bbhost. `set` works from the main thread only. |
+| `player_position`, `player_block` | Yes. They return 1 while the world has no player (the title, a load). |
 | `register_hle` | No: this port's system functions are its own runtime. Returns 1 and logs it. |
 | `visitor` | Always 0: this host never loads a plugin as a visitor. |
 | Everything else | Not yet. Each returns the failure value its comment in the header gives (1, 0, NULL or -1) and logs once that it is missing. |
@@ -133,6 +136,21 @@ lines). A plugin's own `log()` lines start `Plugin <name>:`.
   then runs the displaced prologue and jumps back. At a function's entry the caller's red zone
   is already given up, so the stub may use the stack.
 
+**Event flags** (the world's state as numbered bits: bosses, doors, NPC steps):
+- **`event_flag_get`:** reads the game's flag store directly, with fault-safe reads, so it works
+  from any thread. It returns 1 while the flag's block doesn't exist (yet). In game it matches
+  the game's own reader (`call_guest` on BN `0x17cfc00`) for every flag compared.
+- **`event_flag_set`:** writes the bit, from the game's main thread only.
+- **`on_event_flag`:** calls back with every change, oldest first, on the main thread, at the
+  start of the next frame (before `on_frame`). That covers the game's single-flag writes and
+  plugins' own.
+  - It works through a hook on the game's flag setter (BN `0x17cfcc0`), placed when the first
+    plugin registers. So register in `bb_plugin_image`. After the start, registering works only
+    if another plugin already started the watcher.
+  - Writes the game makes through its range setters and save loads aren't reported.
+  - The queue holds 1024 changes between frames; more are counted, and the log says how many
+    were dropped.
+
 **Careful with two missing functions:** their failure values read as "all clear".
 - `loading_screen()` returns 0, which means "no loading screen".
 - `key_bound()` returns 0, which means "no game action on this key".
@@ -140,8 +158,8 @@ lines). A plugin's own `log()` lines start `Plugin <name>:`.
 A bbhost plugin that waits for `loading_screen() == 0`, or picks keys by `key_bound()`, won't be
 protected by them here until they're provided.
 
-`docs/WORKPLAN.md` in the parent repository gives the order the rest arrives in: event flags,
-params, the player and characters next.
+`docs/WORKPLAN.md` in the parent repository gives the order the rest arrives in: params by
+field name next, then characters, SpEffects, messages, the loading screen and warps.
 
 ## Building a plugin
 

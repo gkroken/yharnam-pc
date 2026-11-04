@@ -10,6 +10,7 @@
 
 #include "bbhost_plugin.h"
 #include "engine_hooks.h"
+#include "plugin_game.h"
 #include "plugin_hooks.h"
 
 #include <stdarg.h>
@@ -45,6 +46,13 @@ static Plugin g_plugins[MAX_PLUGINS];
 static int g_count;
 static FrameCallback g_frames[MAX_CALLBACKS];
 static int g_frame_count;
+typedef struct {
+    int owner;
+    void (*fn)(uint32_t, int, void *);
+    void *user;
+} FlagCallback;
+static FlagCallback g_flag_callbacks[MAX_CALLBACKS];
+static int g_flag_count;
 static SRWLOCK g_lock = SRWLOCK_INIT;
 static enum Phase g_phase;
 static int g_tick_registered;
@@ -381,46 +389,9 @@ static int api_lua_event(const char *name) {
     missing("lua_event");
     return 1;
 }
-static int api_event_flag_get(uint32_t id, int *value) {
-    (void)id;
-    if (value) *value = 0;
-    missing("event_flag_get");
-    return 1;
-}
-static int api_event_flag_set(uint32_t id, int value) {
-    (void)id, (void)value;
-    missing("event_flag_set");
-    return 1;
-}
-static int api_player_stat_get(const char *name, int64_t *value) {
-    (void)name;
-    if (value) *value = 0;
-    missing("player_stat_get");
-    return 1;
-}
-static int api_player_stat_set(const char *name, int64_t value) {
-    (void)name, (void)value;
-    missing("player_stat_set");
-    return 1;
-}
-static int api_on_event_flag(void (*fn)(uint32_t, int, void *), void *user) {
-    (void)fn, (void)user;
-    missing("on_event_flag");
-    return 1;
-}
-static int api_player_position(float xyz[3], float *yaw) {
-    (void)xyz, (void)yaw;
-    missing("player_position");
-    return 1;
-}
 static int api_camera_get(float pos[3], float focus[3]) {
     (void)pos, (void)focus;
     missing("camera_get");
-    return 1;
-}
-static int api_player_block(uint32_t *block) {
-    (void)block;
-    missing("player_block");
     return 1;
 }
 static int api_player_warp(uint32_t block, const float xyz[3], float yaw) {
@@ -475,6 +446,67 @@ static int api_call_guest(uint64_t bn, BbCallRegs *regs) {
     }
     bb_plugin_call(at, regs);
     return 0;
+}
+
+/* --- the game's state (plugin_game.c) ------------------------------------------------------- */
+
+/* Writes into the game's state belong on its main thread, between its own updates. */
+static int on_main_thread(const char *what) {
+    if (GetCurrentThreadId() == g_main_thread) return 1;
+    api_log("%s: only from the game's main thread (on_frame, or a hook running there)", what);
+    return 0;
+}
+
+static int api_event_flag_get(uint32_t id, int *value) {
+    if (value) *value = 0;
+    if (g_phase < PHASE_IMAGE || !eboot_is_109()) return 1;
+    return bb_game_event_flag_get(id, value);
+}
+
+static int api_event_flag_set(uint32_t id, int value) {
+    if (g_phase < PHASE_IMAGE || !eboot_is_109() || !on_main_thread("event_flag_set")) return 1;
+    return bb_game_event_flag_set(id, value);
+}
+
+static int api_on_event_flag(void (*fn)(uint32_t, int, void *), void *user) {
+    if (!fn || g_phase < PHASE_IMAGE || !eboot_is_109()) return 1;
+    /* The watcher is a hook on the game's flag setter: placed while hooks are open, so a
+     * plugin registers in bb_plugin_image (or later, once another did). */
+    if (!bb_game_watching_flags()) {
+        const int placed = g_phase == PHASE_IMAGE && !bb_hooks_sealed() ? bb_game_watch_flags() : 2;
+        if (placed) {
+            api_log("on_event_flag: %s", placed == 2 && g_phase != PHASE_IMAGE
+                                             ? "register in bb_plugin_image (the watcher is a hook)"
+                                             : "the game's flag setter could not be hooked");
+            return 1;
+        }
+    }
+    AcquireSRWLockExclusive(&g_lock);
+    const int ok = g_flag_count < MAX_CALLBACKS;
+    if (ok) g_flag_callbacks[g_flag_count++] = (FlagCallback){t_current, fn, user};
+    ReleaseSRWLockExclusive(&g_lock);
+    return ok ? 0 : 1;
+}
+
+static int api_player_stat_get(const char *name, int64_t *value) {
+    if (value) *value = 0;
+    if (g_phase < PHASE_IMAGE || !eboot_is_109()) return 1;
+    return bb_game_player_stat_get(name, value);
+}
+
+static int api_player_stat_set(const char *name, int64_t value) {
+    if (g_phase < PHASE_IMAGE || !eboot_is_109() || !on_main_thread("player_stat_set")) return 1;
+    return bb_game_player_stat_set(name, value);
+}
+
+static int api_player_position(float xyz[3], float *yaw) {
+    if (g_phase < PHASE_IMAGE || !eboot_is_109()) return 1;
+    return bb_game_player_position(xyz, yaw);
+}
+
+static int api_player_block(uint32_t *block) {
+    if (g_phase < PHASE_IMAGE || !eboot_is_109()) return 1;
+    return bb_game_player_block(block);
 }
 
 static uint64_t api_symbol(const char *name) {
@@ -711,6 +743,10 @@ static void unload(int index, const char *why) {
     for (int i = 0; i < g_frame_count; ++i)
         if (g_frames[i].owner != index) g_frames[kept++] = g_frames[i];
     g_frame_count = kept;
+    kept = 0;
+    for (int i = 0; i < g_flag_count; ++i)
+        if (g_flag_callbacks[i].owner != index) g_flag_callbacks[kept++] = g_flag_callbacks[i];
+    g_flag_count = kept;
     ReleaseSRWLockExclusive(&g_lock);
     bb_plugin_hooks_drop(index);
     host_log("%s: %s; unloaded", p->name, why);
@@ -825,7 +861,34 @@ int bb_plugins_install(void) {
     return live;
 }
 
+/* The flag changes since the last frame, to every on_event_flag callback, oldest first. */
+static void deliver_flag_changes(void) {
+    static uint64_t lost_said;
+    FlagCallback callbacks[MAX_CALLBACKS];
+    AcquireSRWLockShared(&g_lock);
+    const int ncb = g_flag_count;
+    memcpy(callbacks, g_flag_callbacks, (size_t)ncb * sizeof *callbacks);
+    ReleaseSRWLockShared(&g_lock);
+    BbFlagChange changes[256];
+    uint64_t lost = 0;
+    size_t n;
+    while ((n = bb_game_take_flag_changes(changes, 256, &lost)) != 0) {
+        for (size_t c = 0; c < n; ++c)
+            for (int i = 0; i < ncb; ++i) {
+                t_current = callbacks[i].owner;
+                callbacks[i].fn(changes[c].id, changes[c].value, callbacks[i].user);
+            }
+    }
+    t_current = -1;
+    if (lost != lost_said) {
+        host_log("event flags: %llu changes dropped (more than the queue holds between two frames)",
+                 (unsigned long long)(lost - lost_said));
+        lost_said = lost;
+    }
+}
+
 void bb_plugins_frame(void) {
+    if (bb_game_watching_flags()) deliver_flag_changes();
     FrameCallback now[MAX_CALLBACKS];
     AcquireSRWLockShared(&g_lock);
     const int n = g_frame_count;
@@ -846,7 +909,9 @@ void bb_plugins_reset(void) {
         }
     g_count = 0;
     g_frame_count = 0;
+    g_flag_count = 0;
     bb_plugin_hooks_reset();
+    bb_game_reset();
     g_phase = PHASE_NONE;
     g_ini_count = 0;
 }
