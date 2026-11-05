@@ -19,6 +19,11 @@ enum {
     WRITE_BIT = 0x17cfcc0,       /* SprjEventFlagMan::WriteBit(man, id, on) */
     GAME_DATA_MAN = 0x593b130,   /* GameDataMan*; the local player's record at +0x08 */
     WORLD_CHR_MAN = 0x593e878,   /* WorldChrMan*; the main player ChrIns at +0x60 */
+    /* The loading screen, as bbhost reads it (droogie/bbhost src/engine/loading.cpp, GPL-3.0):
+     * a "now loading" request byte, and CSNowLoadingHelper*, whose request bytes at +0x50 (this
+     * frame) and +0x51 (last frame) are set while the game itself asks for one in play. */
+    NOW_LOADING_REQUESTED = 0x596286b,
+    NOW_LOADING_HELPER = 0x593e8b8,
 };
 
 /* FD4VirtualMemoryFlag: bits per block +0x1c, block stride +0x20, block storage +0x28, block
@@ -233,6 +238,17 @@ int bb_game_player_position(float xyz[3], float *yaw) {
 }
 
 uint64_t bb_game_main_player(void) { return main_player(); }
+
+int bb_game_loading_screen(void) {
+    unsigned char *image = bb_guest(0);
+    uint8_t requested = 0, helper_bytes[2] = {0, 0};
+    if (!image || NOW_LOADING_REQUESTED - 0x400000 + 1 > bb_image_size() ||
+        !bb_read((uint64_t)(uintptr_t)(image + (NOW_LOADING_REQUESTED - 0x400000)), &requested, 1))
+        return 0;
+    const uint64_t helper = bn_slot(NOW_LOADING_HELPER);
+    const int in_game = helper && rd(helper + 0x50, helper_bytes, 2) && (helper_bytes[0] || helper_bytes[1]);
+    return requested && !in_game;
+}
 
 int bb_game_player_block(uint32_t *block) {
     const uint64_t chr = main_player();

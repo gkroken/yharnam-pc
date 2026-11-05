@@ -280,6 +280,26 @@ int main(void) {
     CHECK(bb_game_chr_list(list, 8, &n_chr) == 1 && n_chr == 0);
     CHECK(bb_game_sp_effect_apply(NULL, 2200) == 1);
 
+    /* The loading screen (bbhost's reading): the request byte, unless the loading helper's own
+     * request bytes (+0x50, +0x51) are set. */
+    CHECK(bb_game_loading_screen() == 0);                             /* nothing requested */
+    *AT(0x596286b) = 1;
+    CHECK(bb_game_loading_screen() == 1);                             /* requested, no helper yet */
+    unsigned char *loading_helper = calloc(1, 0x58);
+    put64(AT(0x593e8b8), (uint64_t)(uintptr_t)loading_helper);
+    CHECK(bb_game_loading_screen() == 1);                             /* helper not asking */
+    loading_helper[0x50] = 1;
+    CHECK(bb_game_loading_screen() == 0);                             /* the helper asks: in play */
+    loading_helper[0x50] = 0, loading_helper[0x51] = 1;
+    CHECK(bb_game_loading_screen() == 0);                             /* asked last frame */
+    loading_helper[0x51] = 0;
+    *AT(0x596286b) = 0;
+    CHECK(bb_game_loading_screen() == 0);
+    put64(AT(0x593e8b8), 0x10);                                       /* an unreadable helper */
+    *AT(0x596286b) = 1;
+    CHECK(bb_game_loading_screen() == 1);                             /* no fault; read as not asking */
+    *AT(0x596286b) = 0;
+
     printf("game state: %d checks passed\n", checks);
     return 0;
 }

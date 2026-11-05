@@ -45,6 +45,10 @@ int bb_game_player_position(float xyz[3], float *yaw);
 int bb_game_player_block(uint32_t *block);
 /* The main player's ChrIns, or 0 while the world has none. */
 uint64_t bb_game_main_player(void);
+/* 1 while a loading screen is up (a load, a warp, a death), 0 otherwise or before the game's
+ * globals exist. bbhost's reading: the request byte set and the loading helper not asking. Any
+ * thread. */
+int bb_game_loading_screen(void);
 
 /* The characters WorldChrMan holds: the main player first, then each handle-indexed ChrSet's,
  * each once. Main thread only (the dedup list is shared). Up to max into out (may be NULL), the total into *count. 0, or 1 before the world

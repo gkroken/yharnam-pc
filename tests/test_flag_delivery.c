@@ -249,6 +249,16 @@ int main(void) {
         CHECK(g_input(NULL) == 1);
     }
 
+    /* loading_screen: the game's request byte, through the host. */
+    {
+        int (*loading)(void) = (int (*)(void))export_of("late.dll", "loading");
+        CHECK(loading && loading() == 0);
+        *AT(0x596286b) = 1;
+        CHECK(loading() == 1);
+        *AT(0x596286b) = 0;
+        CHECK(loading() == 0);
+    }
+
     /* input_take: through to input_take.c (any thread); bad arguments refused, nothing changed. */
     {
         int (*take)(const uint16_t *, size_t, uint32_t, int) = (int (*)(const uint16_t *, size_t, uint32_t, int))export_of("late.dll", "take");

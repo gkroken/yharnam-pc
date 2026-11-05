@@ -70,6 +70,7 @@ lines). A plugin's own `log()` lines start `Plugin <name>:`.
 | `on_world_load` | Yes. On the main thread, at the start of a frame, when the world gets a new main player (every load builds one) or the player is in another block (a warp). It gets the block, packed as `player_block` packs it. This is bbhost's test; a load's screen may still be up. |
 | `player_position`, `player_block` | Yes. They return 1 while the world has no player (the title, a load). |
 | `input` | Yes, from the main thread. What the keyboard (by SDL scancode) and mouse buttons hold (a key tapped since the last read reads as held once, so a tap shorter than a frame is still seen), and the clicks, motion and wheel since the last read. These are counted apart from the game's own reads, so reading takes nothing from the camera or the pad. While another window has the focus nothing is held or pressed. `playing` is 1 in the world (a main player exists, so not at the title or during a load) with no menu, text box or overlay up and the window focused, mouse camera on or off. Motion counts only with no menu, text box or overlay up. One reader, as on bbhost: two plugins reading share the presses. Returns 1 without a window. |
+| `loading_screen` | Yes, from any thread, as bbhost reads it: the game's "now loading" request byte, unless its loading helper is asking in play. 1 from just after Continue (or a warp, a death) until the screen goes. `on_world_load` comes while it's still up, as on bbhost. 0 before `bb_plugin_image` or on another build. |
 | `input_take` | Yes, from any thread, from `bb_plugin_image` on. While playing (in the world, no menu, text box or overlay up), the listed keys and mouse buttons no longer press what the game binds them to, `wheel` keeps the wheel's notches from the game and `motion` keeps the mouse from turning its camera. The plugin still reads them all through `input`. Controllers are never taken. The menus keep every input. One taker for the whole host, as on bbhost: a call replaces the last, whichever plugin made it, and nothing taken gives everything back. Up to 512 scancodes; a NULL list with a count is refused. |
 | `register_hle` | No: this port's system functions are its own runtime. Returns 1 and logs it. |
 | `visitor` | Always 0: this host never loads a plugin as a visitor. |
@@ -201,15 +202,12 @@ lines). A plugin's own `log()` lines start `Plugin <name>:`.
 One limit, for tables of a single row: there's no row stride to compare, so the size check
 above can't run, and the game's definition is used as it is.
 
-**Careful with two missing functions:** their failure values read as "all clear".
-- `loading_screen()` returns 0, which means "no loading screen".
-- `key_bound()` returns 0, which means "no game action on this key".
+**Careful with one missing function:** its failure value reads as "all clear". `key_bound()`
+returns 0, which means "no game action on this key". A bbhost plugin that picks keys by
+`key_bound()` won't be protected by it here until it's provided; `input_take` keeps a key from
+the game instead.
 
-A bbhost plugin that waits for `loading_screen() == 0`, or picks keys by `key_bound()`, won't be
-protected by them here until they're provided.
-
-`docs/WORKPLAN.md` in the parent repository gives the order the rest arrives in: the loading
-screen and warps next.
+`docs/WORKPLAN.md` in the parent repository gives the order the rest arrives in: warps next.
 
 ## Building a plugin
 

@@ -33,6 +33,7 @@ BB_PLUGIN_EXPORT uint32_t world_block(void) { return g_last_block; }
 BB_PLUGIN_EXPORT int say(const char *text) { return g_api->show_message(text, 2.0f); }
 BB_PLUGIN_EXPORT int place(const char *text) { return g_api->show_text(text, 3.0f, 0.25f, 0.5f, 1.5f, BB_TEXT_RIGHT); }
 BB_PLUGIN_EXPORT int read_input(BbInput *out) { return g_api->input(out); }
+BB_PLUGIN_EXPORT int loading(void) { return g_api->loading_screen(); }
 BB_PLUGIN_EXPORT int take(const uint16_t *keys, size_t n, uint32_t buttons, int motion) { return g_api->input_take(keys, n, buttons, 0, motion); }
 BB_PLUGIN_EXPORT int place_odd(float x, float y, float scale) { return g_api->show_text("odd", 3.0f, x, y, scale, 0); }
 

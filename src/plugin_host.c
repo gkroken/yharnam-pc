@@ -660,8 +660,8 @@ static int api_replace_text(const BbText *texts, size_t count) {
     return -1;
 }
 static int api_loading_screen(void) {
-    missing("loading_screen");
-    return 0;
+    if (g_phase < PHASE_IMAGE || !eboot_is_109()) return 0;
+    return bb_game_loading_screen();
 }
 void bb_plugins_set_input(int (*read)(uint8_t keys[512], uint32_t *buttons, uint32_t *pressed, float *dx,
                                       float *dy, float *wheel, int *playing)) {
