@@ -182,6 +182,12 @@ int main(void) {
     CHECK(say("Round 2") == 0 && !strcmp(said, "Round 2") && said_seconds == 2.0f);
     CHECK(place("x") == 0 && !strcmp(placed, "x") && placed_x == 0.25f && placed_y == 0.5f && placed_scale == 1.5f &&
           placed_align == 2);
+    /* Non-finite or non-positive numbers never reach the overlay (port-b148dcb-N1). */
+    int (*odd)(float, float, float) = (int (*)(float, float, float))export_of("late.dll", "place_odd");
+    const float nan = strtof("nan", NULL), inf = strtof("inf", NULL);
+    CHECK(odd && odd(nan, 0.5f, 1.0f) == 1 && odd(0.5f, inf, 1.0f) == 1 && odd(0.5f, 0.5f, nan) == 1 && odd(0.5f, 0.5f, 0.0f) == 1);
+    CHECK(!strcmp(placed, "x"));                 /* nothing new arrived */
+    CHECK(odd(0.5f, 0.5f, 1.0f) == 0 && !strcmp(placed, "odd"));
 
     /* World loads: the player's block at ChrIns+0x3f8. Late registered in bb_plugin_image. */
     int (*loads)(void) = (int (*)(void))export_of("late.dll", "world_loads");

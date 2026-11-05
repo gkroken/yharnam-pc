@@ -14,6 +14,7 @@
 #include "plugin_hooks.h"
 #include "plugin_params.h"
 
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -566,7 +567,9 @@ static int api_show_message(const char *text, float seconds) {
 }
 
 static int api_show_text(const char *text, float seconds, float x, float y, float scale, uint32_t align) {
-    if (!text || !g_text_line || !(seconds > 0.0f)) return 1;
+    /* Non-finite numbers would reach the overlay's drawing as coordinates and sizes. */
+    if (!text || !g_text_line || !(seconds > 0.0f) || !isfinite(x) || !isfinite(y) || !isfinite(scale) || !(scale > 0.0f))
+        return 1;
     return g_text_line(text, seconds, x, y, scale, align);
 }
 
