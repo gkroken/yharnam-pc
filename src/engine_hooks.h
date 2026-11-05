@@ -58,6 +58,10 @@ int bb_hook_fix_tcb(unsigned char *copy, size_t n);
 /* n bytes of stub code within rel32 reach of the image (16-byte aligned, filled with int3), for
  * hooks built outside this file (plugin_hooks.c). NULL once sealed or when full. */
 unsigned char *bb_hook_code(size_t n);
+/* n bytes of data within rel32 reach of the image (16-byte aligned, zeroed, read-write), from a
+ * 1 MiB region of its own: what the image's code and data are pointed at instead (replace_text).
+ * NULL when full or before bb_hooks_init. */
+unsigned char *bb_image_near(size_t n);
 
 /* `at` holds `call rel32` (E8) or `jmp rel32` (E9) to `target`: sends it to `host` instead.
  * `host` has the callee's signature; it may call the original through bb_guest(target).

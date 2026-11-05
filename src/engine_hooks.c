@@ -83,24 +83,24 @@ static int reachable(const unsigned char *from, const unsigned char *to) {
 
 /* A rel32 jump or call from anywhere in the image must reach the stubs, so they live in a
  * region reserved just past the image (or, failing that, just before it). */
-static unsigned char *reserve_near(unsigned char *image, size_t size) {
+static unsigned char *reserve_near(unsigned char *image, size_t size, size_t want_size) {
     const uintptr_t granule = 0x10000;
     const uintptr_t end = ((uintptr_t)image + size + granule - 1) & ~(granule - 1);
     for (uintptr_t step = 0; step < 0x40000000u; step += granule) {
-        uintptr_t candidates[2] = {end + step, (uintptr_t)image > step + ARENA_SIZE
-                                                   ? (((uintptr_t)image - step - ARENA_SIZE) & ~(granule - 1)) : 0};
+        uintptr_t candidates[2] = {end + step, (uintptr_t)image > step + want_size
+                                                   ? (((uintptr_t)image - step - want_size) & ~(granule - 1)) : 0};
         for (int i = 0; i < 2; ++i) {
             if (!candidates[i]) continue;
             unsigned char *want = (unsigned char *)candidates[i];
-            if (!reachable(image, want) || !reachable(want + ARENA_SIZE, image + size)) continue;
+            if (!reachable(image, want) || !reachable(want + want_size, image + size)) continue;
 #ifdef _WIN32
-            unsigned char *got = VirtualAlloc(want, ARENA_SIZE, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+            unsigned char *got = VirtualAlloc(want, want_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
             if (got) return got;
 #else
-            void *got = mmap(want, ARENA_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+            void *got = mmap(want, want_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
             if (got != MAP_FAILED) {
                 if (got == want) return got;
-                munmap(got, ARENA_SIZE);
+                munmap(got, want_size);
             }
 #endif
         }
@@ -110,7 +110,7 @@ static unsigned char *reserve_near(unsigned char *image, size_t size) {
 
 int bb_hooks_init(unsigned char *image, size_t size) {
     if (g_arena) return refuse("hooks already initialised");
-    g_arena = reserve_near(image, size);
+    g_arena = reserve_near(image, size, ARENA_SIZE);
     if (!g_arena) return refuse("no memory within rel32 reach of the image");
     memset(g_arena, 0xcc, ARENA_SIZE);
     g_image = image;
@@ -163,6 +163,21 @@ int bb_hook_fix_tcb(unsigned char *copy, size_t n) {
         i += sizeof load - 1;
     }
     return fixed;
+}
+
+/* Data beside the image (replace_text's copies): a region of its own, reserved on first use, so it
+ * never takes the hooks' stub space. */
+enum { NEAR_SIZE = 0x100000 };
+static unsigned char *g_near;
+static size_t g_near_used;
+
+unsigned char *bb_image_near(size_t n) {
+    if (!g_image || !n || n > NEAR_SIZE) return NULL;
+    if (!g_near && !(g_near = reserve_near(g_image, g_image_size, NEAR_SIZE))) return NULL;
+    const size_t at = (g_near_used + 15) & ~(size_t)15;
+    if (at + n > NEAR_SIZE) return NULL;
+    g_near_used = at + n;
+    return g_near + at;
 }
 
 unsigned char *bb_hook_code(size_t n) {

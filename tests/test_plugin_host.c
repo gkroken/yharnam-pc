@@ -159,7 +159,7 @@ int main(void) {
     CHECK(r[15] == 1);                                           /* write to a read-only page */
     CHECK(r[16] == 1 && r[17] == 0);                             /* missing: event_flag_get */
     CHECK(r[18] == 1 && r[19] == 0);                             /* missing: param_row */
-    CHECK(r[20] == 1 && r[21] == -1 && r[22] == 1 && r[23] == 0); /* hook (no callback), replace_text, hle, symbol */
+    CHECK(r[20] == 1 && r[21] == 0 && r[22] == 1 && r[23] == 0);  /* hook (no callback), replace_text (none: 0), hle, symbol */
     CHECK(r[24] == 1 && r[25] == 1 && r[26] == 1 && r[27] == 1); /* plugin_dir, host.name, no escape */
     CHECK(r[28] == 1 && r[29] == 0 && r[31] == 1 && r[32] == 1); /* write: code refused, data written */
     CHECK(r[30] == 0);                                           /* patch: already patched is done */

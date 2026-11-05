@@ -12,6 +12,7 @@
 #include "bbhost_plugin.h"
 #include "engine_hooks.h"
 #include "plugin_game.h"
+#include "plugin_text.h"
 #include "plugin_hooks.h"
 #include "plugin_params.h"
 
@@ -689,10 +690,29 @@ static int api_visitor(const char *name) {
     (void)name;
     return 0;  /* this host never loads a plugin as a visitor */
 }
+/* From bb_plugin_image only, before the game runs: code is still written in place then. */
 static int api_replace_text(const BbText *texts, size_t count) {
-    (void)texts, (void)count;
-    missing("replace_text");
-    return -1;
+    if (g_phase != PHASE_IMAGE || !eboot_is_109() || (!texts && count)) return -1;
+    enum { MAX_AT_ONCE = 4096 };
+    if (count > MAX_AT_ONCE) {
+        api_log("replace_text: %zu strings at once, more than %d", count, MAX_AT_ONCE);
+        return -1;
+    }
+    static BbTextItem items[MAX_AT_ONCE];
+    size_t n = 0, outside = 0;
+    for (size_t i = 0; i < count; ++i) {
+        if (texts[i].bn_addr < 0x400000 || !texts[i].text) {
+            ++outside;
+            continue;
+        }
+        items[n].at = texts[i].bn_addr - 0x400000;
+        items[n++].text = texts[i].text;
+    }
+    const BbTextResult r = bb_text_replace(items, n);
+    api_log("text: %zu strings replaced (%zu instructions, %zu pointers); %zu named by nothing found, %zu "
+            "references left alone, %zu refused",
+            r.strings, r.leas, r.pointers, r.unreferenced, r.skipped, r.rejected + outside);
+    return (int)(r.leas + r.pointers);
 }
 static int api_loading_screen(void) {
     if (g_phase < PHASE_IMAGE || !eboot_is_109()) return 0;
