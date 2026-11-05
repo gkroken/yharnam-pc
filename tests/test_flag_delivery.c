@@ -103,6 +103,26 @@ static int g_off_input = -1;
 
 int playing_now(void) { return 1; }
 
+/* PreparePlayerWarp and WarpNextStage_Bonfire as fakes: what was called, in order. */
+static int warp_log[8], warp_logged;
+static float warped_x;
+static BB_GUEST_ABI void fake_prepare_warp(uint64_t res, const int32_t *blk, const float *pos, const float *rot) {
+    (void)res, (void)blk, (void)rot;
+    warped_x = pos[0];
+    warp_log[warp_logged++ & 7] = 1;
+}
+static BB_GUEST_ABI void fake_bonfire(uint64_t lua, uint64_t rp) {
+    (void)lua, (void)rp;
+    warp_log[warp_logged++ & 7] = 2;
+}
+static BB_GUEST_ABI void fake_nothing(uint64_t a) { (void)a; }
+static void jump_to(unsigned char *at, void *fn) {
+    const uint64_t to = (uint64_t)(uintptr_t)fn;
+    at[0] = 0x48, at[1] = 0xb8;
+    memcpy(at + 2, &to, 8);
+    at[10] = 0xff, at[11] = 0xe0;
+}
+
 static DWORD WINAPI off_main(LPVOID unused) {
     (void)unused;
     size_t count = 0;
@@ -285,7 +305,7 @@ int main(void) {
     put32(player + 0x3f8, 0xffffffffu);        /* between maps: nothing yet */
     bb_plugins_frame();
     CHECK(loads() == 0);
-    put32(player + 0x3f8, 0x18010000);         /* placed in the Hunter's Dream */
+    put32(player + 0x3f8, 0x18010000);         /* placed in m24_01 (Central Yharnam) */
     bb_plugins_frame();
     CHECK(loads() == 1 && load_block() == 0x18010000);
     bb_plugins_frame();                        /* the same player, the same block: no load */
@@ -304,6 +324,40 @@ int main(void) {
     put64(wcm + 0x60, (uint64_t)(uintptr_t)player2);  /* back: a new placement after none */
     bb_plugins_frame();
     CHECK(loads() == 4);
+
+    /* Warps: refused for a plugin not flagged OPT_IN | GAMEPLAY (late is neither); with
+     * BB_TEST_WARP=1 queued, made at the start of the next frame, the last call winning; a lamp
+     * warp goes first and drops a pending player warp. */
+    {
+        int (*warp)(float) = (int (*)(float))export_of("late.dll", "warp");
+        int (*lamp)(int32_t) = (int (*)(int32_t))export_of("late.dll", "lamp");
+        CHECK(warp && lamp);
+        jump_to(AT(0x194b110), (void *)fake_prepare_warp);
+        jump_to(AT(0x196d110), (void *)fake_nothing);
+        jump_to(AT(0x196d0e0), (void *)fake_nothing);
+        jump_to(AT(0x172e050), (void *)fake_bonfire);
+        unsigned char *world_res = calloc(1, 0x100);
+        put64(AT(0x593b148), (uint64_t)(uintptr_t)world_res);
+        unsigned char *main_chr = (unsigned char *)(uintptr_t)bb_game_main_player();
+        CHECK(main_chr);
+        put32(main_chr + 0x3f8, 0x18010000);
+        CHECK(warp(1.0f) == 1 && lamp(2412951) == 1);  /* not flagged */
+        bb_plugins_frame();
+        CHECK(warp_logged == 0);
+        set_env("BB_TEST_WARP", "1");
+        CHECK(warp(1.0f) == 0 && warp(2.0f) == 0 && warp_logged == 0);  /* queued, not made yet */
+        bb_plugins_frame();
+        CHECK(warp_logged == 1 && warp_log[0] == 1 && warped_x == 2.0f);  /* once, the last call */
+        bb_plugins_frame();
+        CHECK(warp_logged == 1);
+        CHECK(warp(3.0f) == 0 && lamp(2412951) == 0);
+        bb_plugins_frame();
+        CHECK(warp_logged == 2 && warp_log[1] == 2);  /* the lamp; the player warp dropped */
+        CHECK(lamp(0) == 1 && warp(strtof("nan", NULL)) == 1);
+        put32(main_chr + 0x3f8, 0xffffffffu);  /* between maps: refused */
+        CHECK(warp(1.0f) == 1 && lamp(2412951) == 1);
+        set_env("BB_TEST_WARP", "");
+    }
 
     printf("flag delivery: %d checks passed\n", checks);
     return 0;

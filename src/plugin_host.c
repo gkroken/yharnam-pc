@@ -392,15 +392,50 @@ static int api_camera_get(float pos[3], float focus[3]) {
     missing("camera_get");
     return 1;
 }
+/* Warps: queued from any thread, made at the start of the next frame (deliver_warps). As on
+ * bbhost they're off unless the caller is a plugin flagged BB_PLUGIN_OPT_IN | BB_PLUGIN_GAMEPLAY,
+ * which the player turned on and online play leaves out, or the host runs with BB_TEST_WARP=1.
+ * One of each is pending at most: a later call replaces an earlier one. */
+static SRWLOCK g_warp_lock = SRWLOCK_INIT;
+static struct {
+    int pending;
+    uint32_t block;
+    float xyz[3], yaw;
+    int32_t lamp;
+    int owner, lamp_owner;
+} g_warp;
+
+static int warps_allowed(const char *what) {
+    if (env_is("BB_TEST_WARP", "1")) return 1;
+    const int i = t_current;
+    const uint32_t need = BB_PLUGIN_OPT_IN | BB_PLUGIN_GAMEPLAY;
+    if (i >= 0 && i < g_count && g_plugins[i].info && (g_plugins[i].info->flags & need) == need) return 1;
+    api_log("%s: only for a plugin flagged BB_PLUGIN_OPT_IN | BB_PLUGIN_GAMEPLAY (or BB_TEST_WARP=1)", what);
+    return 0;
+}
+
 static int api_player_warp(uint32_t block, const float xyz[3], float yaw) {
-    (void)block, (void)xyz, (void)yaw;
-    missing("player_warp");
-    return 1;
+    if (g_phase < PHASE_IMAGE || !eboot_is_109() || !xyz || !isfinite(xyz[0]) || !isfinite(xyz[1]) ||
+        !isfinite(xyz[2]) || !isfinite(yaw) || !warps_allowed("player_warp") || bb_game_player_block(NULL))
+        return 1;
+    AcquireSRWLockExclusive(&g_warp_lock);
+    g_warp.pending = 1;
+    g_warp.block = block;
+    memcpy(g_warp.xyz, xyz, sizeof g_warp.xyz);
+    g_warp.yaw = yaw;
+    g_warp.owner = t_current;
+    ReleaseSRWLockExclusive(&g_warp_lock);
+    return 0;
 }
 static int api_lamp_warp(int32_t return_point) {
-    (void)return_point;
-    missing("lamp_warp");
-    return 1;
+    if (g_phase < PHASE_IMAGE || !eboot_is_109() || return_point <= 0 || !warps_allowed("lamp_warp") ||
+        bb_game_player_block(NULL))
+        return 1;
+    AcquireSRWLockExclusive(&g_warp_lock);
+    g_warp.lamp = return_point;
+    g_warp.lamp_owner = t_current;
+    ReleaseSRWLockExclusive(&g_warp_lock);
+    return 0;
 }
 /* hook and hook2: from bb_plugin_image only, while the engine hooks are open. */
 static int place_hook(const char *what, uint64_t bn, const void *prologue, size_t n, BbHookFn fn, BbHookFn2 fn2,
@@ -971,7 +1006,46 @@ static void deliver_flag_changes(void) {
     }
 }
 
+/* The warps queued since the last frame, made before anything else in this one. A lamp warp
+ * (a full load) goes first; a player warp still pending then is dropped, logged, since the
+ * player is about to leave. */
+static void deliver_warps(void) {
+    AcquireSRWLockExclusive(&g_warp_lock);
+    const int32_t lamp = g_warp.lamp;
+    const int lamp_owner = g_warp.lamp_owner, pending = g_warp.pending, owner = g_warp.owner;
+    const uint32_t block = g_warp.block;
+    const float xyz[3] = {g_warp.xyz[0], g_warp.xyz[1], g_warp.xyz[2]}, yaw = g_warp.yaw;
+    g_warp.lamp = 0;
+    g_warp.pending = 0;
+    ReleaseSRWLockExclusive(&g_warp_lock);
+    uint32_t from = 0;
+    if (lamp) {
+        t_current = lamp_owner;
+        if (bb_game_player_block(&from)) api_log("lamp warp to %d dropped: no player", (int)lamp);
+        else if (bb_game_lamp_warp(lamp)) api_log("lamp warp to %d failed", (int)lamp);
+        else api_log("lamp warp from block 0x%08x to return point %d", from, (int)lamp);
+        if (pending) {
+            t_current = owner;
+            api_log("player warp dropped: a lamp warp went first");
+        }
+        t_current = -1;
+        return;
+    }
+    if (!pending) return;
+    t_current = owner;
+    uint32_t now = 0;
+    if (bb_game_player_block(&from) || bb_game_player_warp(block, xyz, yaw)) {
+        api_log("player warp dropped: no player");
+    } else {
+        bb_game_player_block(&now);
+        api_log("player warp from block 0x%08x into 0x%08x at %.3f %.3f %.3f yaw %.3f; now in 0x%08x", from,
+                block ? block : from, xyz[0], xyz[1], xyz[2], yaw, now);
+    }
+    t_current = -1;
+}
+
 void bb_plugins_frame(void) {
+    if (g_phase == PHASE_RUNNING && eboot_is_109()) deliver_warps();
     if (g_world_count && g_phase == PHASE_RUNNING && eboot_is_109()) deliver_world_loads();
     if (bb_game_watching_flags()) deliver_flag_changes();
     FrameCallback now[MAX_CALLBACKS];

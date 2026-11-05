@@ -74,6 +74,45 @@ static BB_GUEST_ABI void fake_apply(uint64_t ins, uint64_t id, uint64_t source, 
     applied_scale = scale;
 }
 
+/* The warp routines, as fakes the image's addresses jump to: each records its call. */
+static int warp_calls[4];
+static uint64_t warp_res, warp_rp, warp_use, warp_lua;
+static int32_t warp_blk;
+static float warp_pos[3], warp_rot[3];
+static int warp_aligned, warp_order[8], warp_n;
+static BB_GUEST_ABI void fake_prepare_warp(uint64_t res, const int32_t *blk, const float *pos, const float *rot) {
+    ++warp_calls[0];
+    warp_order[warp_n++ & 7] = 0;
+    warp_res = res;
+    warp_blk = blk[0];
+    memcpy(warp_pos, pos, sizeof warp_pos);
+    memcpy(warp_rot, rot, sizeof warp_rot);
+    warp_aligned = !((uintptr_t)blk & 15) && !((uintptr_t)pos & 15) && !((uintptr_t)rot & 15) && pos[3] == 0.0f;
+}
+static BB_GUEST_ABI void fake_set_return_point(uint64_t rp) {
+    ++warp_calls[1];
+    warp_order[warp_n++ & 7] = 1;
+    warp_rp = rp;
+}
+static BB_GUEST_ABI void fake_use_return_point(uint64_t on) {
+    ++warp_calls[2];
+    warp_order[warp_n++ & 7] = 2;
+    warp_use = on;
+}
+static BB_GUEST_ABI void fake_warp_bonfire(uint64_t lua, uint64_t rp) {
+    ++warp_calls[3];
+    warp_order[warp_n++ & 7] = 3;
+    warp_lua = lua;
+    warp_rp = rp;
+}
+/* movabs rax, fn; jmp rax at a code address of the fake image. */
+static void jump_to(unsigned char *at, void *fn) {
+    const uint64_t to = (uint64_t)(uintptr_t)fn;
+    at[0] = 0x48, at[1] = 0xb8;
+    memcpy(at + 2, &to, 8);
+    at[10] = 0xff, at[11] = 0xe0;
+}
+
 /* A ChrIns: vtable, handle; modules (+0x3b0) with data (+0x20: hp, max hp, the model wstring)
  * and physics (+0x68: position). */
 static unsigned char *chr_ins(unsigned char *vtable, uint32_t handle, int32_t hp, const char *model, float x) {
@@ -299,6 +338,34 @@ int main(void) {
     *AT(0x596286b) = 1;
     CHECK(bb_game_loading_screen() == 1);                             /* no fault; read as not asking */
     *AT(0x596286b) = 0;
+
+    /* Warps (bbhost's routines): the arguments each gets, the in-block default, and nothing
+     * called without a player or without WorldRes. */
+    jump_to(AT(0x194b110), (void *)fake_prepare_warp);
+    jump_to(AT(0x196d110), (void *)fake_set_return_point);
+    jump_to(AT(0x196d0e0), (void *)fake_use_return_point);
+    jump_to(AT(0x172e050), (void *)fake_warp_bonfire);
+    put64(wcm + 0x60, (uint64_t)(uintptr_t)chr);
+    put32(chr + 0x3f8, 0x18010000);
+    const float to[3] = {10.0f, -2.5f, 300.0f};
+    CHECK(bb_game_player_warp(0, to, 1.25f) == 1 && warp_calls[0] == 0);  /* no WorldRes yet */
+    unsigned char *world_res = calloc(1, 0x100);
+    put64(AT(0x593b148), (uint64_t)(uintptr_t)world_res);
+    CHECK(bb_game_player_warp(0, to, 1.25f) == 0 && warp_calls[0] == 1);
+    CHECK(warp_res == (uint64_t)(uintptr_t)world_res && warp_blk == 0x18010000 && warp_aligned);  /* 0: its own block */
+    CHECK(warp_pos[0] == 10.0f && warp_pos[1] == -2.5f && warp_pos[2] == 300.0f);
+    CHECK(warp_rot[0] == 0.0f && warp_rot[1] == 1.25f && warp_rot[2] == 0.0f);
+    CHECK(bb_game_player_warp(0x18000000, to, 0.0f) == 0 && warp_blk == 0x18000000);  /* another block */
+    CHECK(bb_game_player_warp(0, NULL, 0.0f) == 1 && warp_calls[0] == 2);
+    warp_n = 0;
+    CHECK(bb_game_lamp_warp(2412951) == 0);
+    CHECK(warp_calls[1] == 1 && warp_calls[2] == 1 && warp_calls[3] == 1);
+    CHECK(warp_order[0] == 1 && warp_order[1] == 2 && warp_order[2] == 3);  /* set, use, then the stage change */
+    CHECK(warp_rp == 2412951 && warp_use == 1 && warp_lua == 0);
+    CHECK(bb_game_lamp_warp(0) == 1 && bb_game_lamp_warp(-5) == 1 && warp_calls[1] == 1);
+    put64(wcm + 0x60, 0);                                             /* no player */
+    CHECK(bb_game_player_warp(0, to, 0.0f) == 1 && bb_game_lamp_warp(2412951) == 1);
+    CHECK(warp_calls[0] == 2 && warp_calls[1] == 1 && warp_calls[3] == 1);
 
     printf("game state: %d checks passed\n", checks);
     return 0;

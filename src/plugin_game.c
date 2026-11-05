@@ -24,6 +24,12 @@ enum {
      * frame) and +0x51 (last frame) are set while the game itself asks for one in play. */
     NOW_LOADING_REQUESTED = 0x596286b,
     NOW_LOADING_HELPER = 0x593e8b8,
+    /* Warps, as bbhost makes them (droogie/bbhost src/engine/world_chr.cpp, GPL-3.0). */
+    WORLD_RES = 0x593b148,               /* the world manager PreparePlayerWarp is called on */
+    PREPARE_PLAYER_WARP = 0x194b110,     /* (WorldRes*, const int* block, const vec4* pos, const vec4* rot) */
+    SET_RETURN_POINT_ENTITY = 0x196d110, /* (ReturnPointParam row): the lamp, as resting at it sets it */
+    SET_USE_RETURN_POINT = 0x196d0e0,    /* (1): the next load places the player there */
+    WARP_NEXT_STAGE_BONFIRE = 0x172e050, /* (lua state, return point): the stage change */
 };
 
 /* FD4VirtualMemoryFlag: bits per block +0x1c, block stride +0x20, block storage +0x28, block
@@ -238,6 +244,50 @@ int bb_game_player_position(float xyz[3], float *yaw) {
 }
 
 uint64_t bb_game_main_player(void) { return main_player(); }
+
+/* A function of the image by its Binary Ninja address, or 0. */
+static void *image_fn(uint64_t bn) {
+    unsigned char *image = bb_guest(0);
+    return image && bn >= 0x400000 && bn - 0x400000 < bb_image_size() ? image + (bn - 0x400000) : NULL;
+}
+
+int bb_game_player_warp(uint32_t block, const float xyz[3], float yaw) {
+    uint32_t from = 0;
+    const uint64_t res = bn_slot(WORLD_RES);
+    void *fn = image_fn(PREPARE_PLAYER_WARP);
+    if (!xyz || !res || !fn || bb_game_player_block(&from)) return 1;
+    /* Block 0 is the player's own: the in-map path. Another block must be resident. */
+    __attribute__((aligned(16))) int32_t blk[4] = {(int32_t)(block ? block : from), 0, 0, 0};
+    __attribute__((aligned(16))) float pos[4] = {xyz[0], xyz[1], xyz[2], 0.0f};
+    __attribute__((aligned(16))) float rot[4] = {0.0f, yaw, 0.0f, 0.0f};  /* pitch, yaw, roll */
+    BbCallRegs r;
+    memset(&r, 0, sizeof r);
+    r.arg[0] = res;
+    r.arg[1] = (uint64_t)(uintptr_t)blk;
+    r.arg[2] = (uint64_t)(uintptr_t)pos;
+    r.arg[3] = (uint64_t)(uintptr_t)rot;
+    bb_plugin_call(fn, &r);
+    return 0;
+}
+
+int bb_game_lamp_warp(int32_t return_point) {
+    void *set_entity = image_fn(SET_RETURN_POINT_ENTITY), *use = image_fn(SET_USE_RETURN_POINT),
+         *warp = image_fn(WARP_NEXT_STAGE_BONFIRE);
+    if (return_point <= 0 || !set_entity || !use || !warp || bb_game_player_block(NULL)) return 1;
+    /* The lamp as the return point, as resting at it makes it, the load told to use it, then the
+     * stage change. */
+    BbCallRegs r;
+    memset(&r, 0, sizeof r);
+    r.arg[0] = (uint32_t)return_point;
+    bb_plugin_call(set_entity, &r);
+    memset(&r, 0, sizeof r);
+    r.arg[0] = 1;
+    bb_plugin_call(use, &r);
+    memset(&r, 0, sizeof r);
+    r.arg[1] = (uint32_t)return_point;
+    bb_plugin_call(warp, &r);
+    return 0;
+}
 
 int bb_game_loading_screen(void) {
     unsigned char *image = bb_guest(0);

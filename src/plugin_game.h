@@ -50,6 +50,14 @@ uint64_t bb_game_main_player(void);
  * thread. */
 int bb_game_loading_screen(void);
 
+/* Warps, made now through the game's own routines (bbhost's). Main thread, between the game's
+ * updates (the host runs them at the start of a frame). 0 when made; 1 with no player.
+ * player_warp: to xyz facing yaw, in the player's block (0) or a resident one, as
+ * player_block packs it. lamp_warp: a full map load to a lamp, by its ReturnPointParam row
+ * (the lamp's entity id + 1000: 2412951 is Central Yharnam's). */
+int bb_game_player_warp(uint32_t block, const float xyz[3], float yaw);
+int bb_game_lamp_warp(int32_t return_point);
+
 /* The characters WorldChrMan holds: the main player first, then each handle-indexed ChrSet's,
  * each once. Main thread only (the dedup list is shared). Up to max into out (may be NULL), the total into *count. 0, or 1 before the world
  * exists. The BbChr pointers stay good until the world changes (next frame, to be safe). */
