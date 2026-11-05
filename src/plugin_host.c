@@ -60,6 +60,7 @@ static enum Phase g_phase;
 static int g_tick_registered;
 static BbHostApi g_api;
 static DWORD g_main_thread;  /* the thread that starts the plugins: the game's main thread here */
+static int (*g_input_read)(uint8_t *, uint32_t *, uint32_t *, float *, float *, float *, int *);
 static int (*g_text_message)(const char *, float);
 static int (*g_text_line)(const char *, float, float, float, float, unsigned);
 typedef struct {
@@ -661,10 +662,22 @@ static int api_loading_screen(void) {
     missing("loading_screen");
     return 0;
 }
+void bb_plugins_set_input(int (*read)(uint8_t keys[512], uint32_t *buttons, uint32_t *pressed, float *dx,
+                                      float *dy, float *wheel, int *playing)) {
+    g_input_read = read;
+}
+
+/* One reader (bbhost's rule): the presses, motion and wheel since the last read, whoever read. */
 static int api_input(BbInput *out) {
-    if (out) memset(out, 0, sizeof *out);
-    missing("input");
-    return 1;
+    if (!out) return 1;
+    memset(out, 0, sizeof *out);
+    if (g_phase < PHASE_IMAGE || !g_input_read || !on_main_thread("input")) return 1;
+    int playing = 0;
+    const int r = g_input_read(out->key, &out->buttons, &out->pressed, &out->dx, &out->dy, &out->wheel, &playing);
+    /* The window can't tell the title from the world: playing also needs a player in it. */
+    out->playing = playing && bb_game_main_player() != 0;
+    if (r) memset(out, 0, sizeof *out);
+    return r ? 1 : 0;
 }
 static int api_input_take(const uint16_t *scancodes, size_t n, uint32_t buttons, int wheel, int motion) {
     (void)scancodes, (void)n, (void)buttons, (void)wheel, (void)motion;

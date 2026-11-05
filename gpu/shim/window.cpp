@@ -22,6 +22,11 @@ bool TakeWindowStatus(std::string& status); // below: a status for the title (sh
 void SetMouseCaptured(bool captured);
 static std::atomic<bool> g_menu_pointer{false}; // below: a menu shows the pointer
 static std::atomic<bool> g_window_focused{false};
+// Plugins' input (bbgpu_plugin_input, below): counted apart from the game's own reads, so a plugin
+// reading the mouse takes nothing from the camera or the pad.
+static std::atomic<bool> g_plugin_playing{false};
+static std::atomic<long long> g_plugin_dx{0}, g_plugin_dy{0}, g_plugin_wheel{0}; // in 1/16
+static std::atomic<uint32_t> g_plugin_pressed{0};
 static std::atomic<int> g_window_points_w{0}, g_window_points_h{0};
 static bool g_pad_in_use = false; // window thread: the last input came from a controller
 static std::atomic<SDL_DisplayID> g_game_display{0}; // ChooseDisplay's answer, 0 before the window
@@ -283,6 +288,10 @@ bool WindowSDL::PollEvents() {
     if (!can_capture && !menu_pointer) {
         mouse_armed = false;
     }
+    // Playing, for plugins: in the world with no menu, text box or overlay up, the window focused.
+    // Unlike can_capture, it doesn't need the mouse camera on.
+    g_plugin_playing.store(!text_active && !BbOverlay::ReleasesMouse() && focused && !menu_pointer,
+                           std::memory_order_relaxed);
     if ((can_capture && mouse_armed) != mouse_captured) {
         mouse_captured = can_capture && mouse_armed;
         SDL_SetWindowRelativeMouseMode(window, mouse_captured);
@@ -337,12 +346,22 @@ bool WindowSDL::PollEvents() {
             height = h;
             break;
         }
-        case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        case SDL_EVENT_MOUSE_BUTTON_DOWN: {
             mouse_armed = can_capture; // a click in a menu is the pointer's, not the camera's
+            // BbInput's bits: 0 left, 1 right, 2 middle, 3 back, 4 forward.
+            static const uint32_t bit[] = {0, 1u << 0, 1u << 2, 1u << 1, 1u << 3, 1u << 4};
+            if (event.button.button < sizeof bit / sizeof *bit) {
+                g_plugin_pressed.fetch_or(bit[event.button.button], std::memory_order_relaxed);
+            }
             break;
+        }
         case SDL_EVENT_MOUSE_MOTION:
             if (mouse_captured) {
                 NoteMouseMotion(event.motion.xrel, event.motion.yrel);
+            }
+            if (g_plugin_playing.load(std::memory_order_relaxed)) {
+                g_plugin_dx.fetch_add(std::llround(event.motion.xrel * 16.0f), std::memory_order_relaxed);
+                g_plugin_dy.fetch_add(std::llround(event.motion.yrel * 16.0f), std::memory_order_relaxed);
             }
             break;
         case SDL_EVENT_WINDOW_FOCUS_LOST:
@@ -412,6 +431,7 @@ bool WindowSDL::PollEvents() {
 // action bound to WheelUp / WheelDown (input_bindings.h).
 static std::atomic<int> g_wheel_up{0}, g_wheel_down{0};
 void NoteMouseWheel(float y) {
+    g_plugin_wheel.fetch_add(std::llround(y * 16.0f), std::memory_order_relaxed);
     if (y > 0) g_wheel_up.fetch_add(1, std::memory_order_relaxed);
     if (y < 0) g_wheel_down.fetch_add(1, std::memory_order_relaxed);
 }
@@ -474,6 +494,38 @@ extern "C" int bbgpu_mouse_stage_position(float* x, float* y) {
     float mx = 0, my = 0;
     SDL_GetMouseState(&mx, &my); // window points, like SDL_GetWindowSize
     return BbStage::Point(mx, my, ww, wh, fw, fh, x, y);
+}
+
+extern "C" int bbgpu_plugin_input(uint8_t keys[512], uint32_t* buttons, uint32_t* pressed, float* dx, float* dy,
+                                  float* wheel, int* playing) {
+    std::memset(keys, 0, 512);
+    *buttons = *pressed = 0;
+    *dx = *dy = *wheel = 0.0f;
+    *playing = 0;
+    if (!SDL_WasInit(SDL_INIT_VIDEO)) {
+        return 1;
+    }
+    // Taken on every read, so nothing piles up while unfocused.
+    *pressed = g_plugin_pressed.exchange(0, std::memory_order_relaxed);
+    *dx = float(g_plugin_dx.exchange(0, std::memory_order_relaxed)) / 16.0f;
+    *dy = float(g_plugin_dy.exchange(0, std::memory_order_relaxed)) / 16.0f;
+    *wheel = float(g_plugin_wheel.exchange(0, std::memory_order_relaxed)) / 16.0f;
+    if (!g_window_focused.load(std::memory_order_relaxed)) {
+        *pressed = 0;
+        *dx = *dy = *wheel = 0.0f;
+        return 0; // another window has the keyboard: nothing is held for the game's
+    }
+    int n = 0;
+    const bool* state = SDL_GetKeyboardState(&n);
+    for (int i = 0; state && i < n && i < 512; ++i) {
+        keys[i] = state[i] ? 1 : 0;
+    }
+    const SDL_MouseButtonFlags b = SDL_GetMouseState(nullptr, nullptr);
+    *buttons = ((b & SDL_BUTTON_LMASK) ? 1u : 0) | ((b & SDL_BUTTON_RMASK) ? 2u : 0) |
+               ((b & SDL_BUTTON_MMASK) ? 4u : 0) | ((b & SDL_BUTTON_X1MASK) ? 8u : 0) |
+               ((b & SDL_BUTTON_X2MASK) ? 16u : 0);
+    *playing = g_plugin_playing.load(std::memory_order_relaxed) ? 1 : 0;
+    return 0;
 }
 
 extern "C" int bbgpu_mouse_captured(void) {

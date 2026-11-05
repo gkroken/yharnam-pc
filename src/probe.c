@@ -744,6 +744,7 @@ int main(int argc, char **argv) {
             bb_hooks_set_tcb_displacement(runtime_thread_tcb_offset());
             /* show_message and show_text draw through the overlay (bbport_plugin_text.cpp). */
             bb_plugins_set_text(bbgpu_plugin_message, bbgpu_plugin_text);
+            bb_plugins_set_input(bbgpu_plugin_input);
             printf("Engine hooks: %d installed\n", bb_engine_install());
             bbgpu_set_frame_callback(bb_engine_frame);
         }

@@ -5,6 +5,8 @@
 #ifndef BB_PLUGIN_HOST_H
 #define BB_PLUGIN_HOST_H
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -29,6 +31,11 @@ void bb_plugins_frame(void);
  * before bb_plugins_install; tests set their own. Without them both return 1. */
 void bb_plugins_set_text(int (*message)(const char *, float),
                          int (*text)(const char *, float, float, float, float, unsigned));
+
+/* Where input reads the keyboard and mouse: bbgpu_plugin_input (gpu/bbgpu.h), set by probe.c;
+ * tests set their own. Without it input returns 1 (headless). */
+void bb_plugins_set_input(int (*read)(uint8_t keys[512], uint32_t *buttons, uint32_t *pressed, float *dx,
+                                      float *dy, float *wheel, int *playing));
 
 /* Tests: unloads every plugin and forgets all state, so another install can run. */
 void bb_plugins_reset(void);

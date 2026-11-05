@@ -12,6 +12,7 @@
 #include <string.h>
 #include <windows.h>
 
+#include "bbhost_plugin.h"
 #include "engine_hooks.h"
 #include "plugin_game.h"
 #include "plugin_host.h"
@@ -73,12 +74,40 @@ static int fake_text(const char *text, float seconds, float x, float y, float sc
     placed_align = align;
     return 0;
 }
+/* The window's keyboard and mouse, as probe.c hands bbgpu_plugin_input over: here, a recorder
+ * that gives one read's worth (the next read finds nothing new). */
+static int input_reads;
+static int fake_input(uint8_t keys[512], uint32_t *buttons, uint32_t *pressed, float *dx, float *dy, float *wheel,
+                      int *playing) {
+    ++input_reads;
+    memset(keys, 0, 512);
+    keys[4] = 1;    /* A */
+    keys[511] = 1;  /* the last one */
+    *buttons = 2;
+    *pressed = input_reads == 1 ? 3 : 0;
+    *dx = input_reads == 1 ? 12.5f : 0;
+    *dy = -3;
+    *wheel = 1;
+    *playing = 1;
+    return 0;
+}
+static int fake_input_headless(uint8_t keys[512], uint32_t *buttons, uint32_t *pressed, float *dx, float *dy,
+                               float *wheel, int *playing) {
+    keys[4] = 1, *buttons = 1, *pressed = 1, *dx = *dy = *wheel = 1, *playing = 1;  /* junk: must not reach the plugin */
+    return 1;
+}
+typedef int (*InputFn)(BbInput *);
+static InputFn g_input;
+static int g_off_input = -1;
+
 static DWORD WINAPI off_main(LPVOID unused) {
     (void)unused;
     size_t count = 0;
     g_off_set = g_set(7, 1);
     g_off_stat = g_stat(5);
     g_off_chr = g_chr(&count);
+    BbInput in;
+    g_off_input = g_input ? g_input(&in) : -1;
     return 0;
 }
 
@@ -145,6 +174,9 @@ int main(void) {
     g_stat = (StatFn)export_of("force_on.dll", "stat_set");
     g_chr = (ChrFn)export_of("force_on.dll", "chr_count");
     CHECK(seen_on && seen_off && g_set && g_stat && g_chr);
+    g_input = (InputFn)export_of("late.dll", "read_input");
+    CHECK(g_input);
+    bb_plugins_set_input(fake_input);  /* set now: off the main thread it must still refuse */
 
     /* Off the main thread both sets refuse; on it they work. */
     HANDLE t = CreateThread(NULL, 0, off_main, NULL, 0, NULL);
@@ -152,6 +184,7 @@ int main(void) {
     CloseHandle(t);
     CHECK(g_off_set == 1 && g_off_stat == 1 && bits[0] == 0);
     CHECK(g_off_chr == 1);                               /* chr_list: main thread only */
+    CHECK(g_off_input == 1 && input_reads == 0);         /* input: main thread only, the window untouched */
     size_t chr_count = 0;
     CHECK(g_chr(&chr_count) == 0 && chr_count == 1);      /* on it: the main player */
     uint32_t echoes = 0;
@@ -188,6 +221,30 @@ int main(void) {
     CHECK(odd && odd(nan, 0.5f, 1.0f) == 1 && odd(0.5f, inf, 1.0f) == 1 && odd(0.5f, 0.5f, nan) == 1 && odd(0.5f, 0.5f, 0.0f) == 1);
     CHECK(!strcmp(placed, "x"));                 /* nothing new arrived */
     CHECK(odd(0.5f, 0.5f, 1.0f) == 0 && !strcmp(placed, "odd"));
+
+    /* Input: what the window reports, field for field; the presses and motion only once. */
+    {
+        BbInput in;
+        memset(&in, 0xab, sizeof in);
+        CHECK(g_input(&in) == 0 && input_reads == 1);
+        CHECK(in.key[4] == 1 && in.key[511] == 1 && in.key[5] == 0 && in.buttons == 2 && in.pressed == 3);
+        CHECK(in.dx == 12.5f && in.dy == -3.0f && in.wheel == 1.0f && in.playing == 1);
+        CHECK(g_input(&in) == 0 && in.pressed == 0 && in.dx == 0.0f && in.buttons == 2);
+        /* The title or a load: the window says playing, but there's no player, so not playing. */
+        put64(wcm + 0x60, 0);
+        CHECK(g_input(&in) == 0 && in.playing == 0 && in.buttons == 2);
+        put64(wcm + 0x60, (uint64_t)(uintptr_t)player);
+        CHECK(g_input(&in) == 0 && in.playing == 1);
+        /* Headless (no window): 1, and everything zero whatever the window side left. */
+        bb_plugins_set_input(fake_input_headless);
+        memset(&in, 0xab, sizeof in);
+        CHECK(g_input(&in) == 1 && in.key[4] == 0 && in.buttons == 0 && in.pressed == 0 && in.dx == 0.0f &&
+              in.playing == 0);
+        bb_plugins_set_input(NULL);
+        memset(&in, 0xab, sizeof in);
+        CHECK(g_input(&in) == 1 && in.key[4] == 0 && in.playing == 0);
+        CHECK(g_input(NULL) == 1);
+    }
 
     /* World loads: the player's block at ChrIns+0x3f8. Late registered in bb_plugin_image. */
     int (*loads)(void) = (int (*)(void))export_of("late.dll", "world_loads");

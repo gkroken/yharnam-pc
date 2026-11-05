@@ -79,6 +79,13 @@ uint32_t bbgpu_mouse_wheel_take(void);
  * the last call in mouse counts (right and down positive); 1 when there was any. */
 int bbgpu_mouse_captured(void);
 int bbgpu_mouse_motion_take(float *dx, float *dy);
+/* The keyboard and mouse for plugins (bbhost's input, src/plugin_host.c), counted apart from the
+ * game's reads: keys by SDL scancode, 1 while held; the mouse buttons held and pressed since the
+ * last call (bit 0 left, 1 right, 2 middle, 3 back, 4 forward); motion while playing and wheel
+ * notches since the last call; playing: in the world, no menu or text box, the window focused.
+ * Nothing held, pressed or moved while another window has the focus. 1 without a window. */
+int bbgpu_plugin_input(uint8_t keys[512], uint32_t *buttons, uint32_t *pressed, float *dx, float *dy,
+                       float *wheel, int *playing);
 /* The menu pointer (src/menu_pointer.c): a menu owns the mouse, so the window shows the cursor
  * instead of holding it for the camera, and takes it back for the camera when the menu closes
  * if it had it. */
