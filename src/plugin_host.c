@@ -712,6 +712,9 @@ static int api_replace_text(const BbText *texts, size_t count) {
     api_log("text: %zu strings replaced (%zu instructions, %zu pointers); %zu named by nothing found, %zu "
             "references left alone, %zu refused",
             r.strings, r.leas, r.pointers, r.unreferenced, r.skipped, r.rejected + outside);
+    if (r.already)
+        api_log("text: %zu of these strings were already replaced by an earlier call (another plugin's?): "
+                "the first replacement stays", r.already);
     return (int)(r.leas + r.pointers);
 }
 static int api_loading_screen(void) {

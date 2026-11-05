@@ -27,6 +27,19 @@ static int find(const Moved *moved, int n, uint64_t at) {
     return -1;
 }
 
+/* Every string replaced so far, by any call: once moved, nothing names the original any more,
+ * so a later replacement of it would find nothing. The first one stays; later ones are refused
+ * and counted (port-128d4b0-N2). */
+enum { MAX_DONE = 4096 };
+static uint64_t g_done[MAX_DONE];
+static int g_done_count;
+
+static int done_before(uint64_t at) {
+    for (int i = 0; i < g_done_count; ++i)
+        if (g_done[i] == at) return 1;
+    return 0;
+}
+
 BbTextResult bb_text_replace(const BbTextItem *items, size_t count) {
     BbTextResult out = {0};
     unsigned char *image = bb_guest(0);
@@ -41,6 +54,10 @@ BbTextResult bb_text_replace(const BbTextItem *items, size_t count) {
         const BbTextItem *t = &items[i];
         size_t len = 0;
         while (t->text && len < MAX_CHARS && t->text[len]) ++len;
+        if (t->text && len && done_before(t->at)) {
+            ++out.already;
+            continue;
+        }
         if (!t->text || !len || (t->at & 1) || t->at + 2 > size || !bb_image_is_code(t->at, 2) || n == MAX_ITEMS ||
             find(moved, n, t->at) >= 0) {
             ++out.rejected;
@@ -113,6 +130,7 @@ BbTextResult bb_text_replace(const BbTextItem *items, size_t count) {
     for (int k = 0; k < n; ++k) {
         if (refs[k]) ++out.strings;
         else ++out.unreferenced;
+        if (refs[k] && g_done_count < MAX_DONE) g_done[g_done_count++] = moved[k].at;
     }
     return out;
 }

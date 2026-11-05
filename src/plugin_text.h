@@ -22,6 +22,7 @@ typedef struct {
     size_t unreferenced;  /* strings nothing was found to name */
     size_t skipped;       /* references left alone: a hook or patch owns those bytes, or out of reach */
     size_t rejected;      /* not a whole read-only string of the image, empty, twice, or no room */
+    size_t already;       /* replaced by an earlier call (a plugin before): the first one stays */
 } BbTextResult;
 
 /* Before the game runs (the plugins' image phase), on the image as loaded. */

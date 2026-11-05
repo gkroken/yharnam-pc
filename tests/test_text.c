@@ -103,6 +103,14 @@ int main(void) {
     const int64_t reach = (int64_t)((uintptr_t)copy - (uintptr_t)image);
     CHECK(reach > -0x7ff00000LL && reach < 0x7ff00000LL);
 
+    /* A second replacement of the same string (another plugin): refused as already done, the
+     * first copy stays named (port-128d4b0-N2). An unreferenced string isn't "done". */
+    static const uint16_t second[] = {'S', 'E', 'C', 0};
+    const BbTextItem again[] = {{0x1000, second}, {0x1200, second}};
+    const BbTextResult r2 = bb_text_replace(again, 2);
+    CHECK(r2.already == 1 && r2.leas == 0 && r2.unreferenced == 1 && r2.rejected == 0);
+    CHECK(lea_target(0x2000) == copy && utf16_is(copy, "NEW"));
+
     /* Nothing, or nothing valid: nothing changes. */
     const BbTextResult none = bb_text_replace(items, 0);
     CHECK(none.strings == 0 && none.leas == 0 && none.rejected == 0);
