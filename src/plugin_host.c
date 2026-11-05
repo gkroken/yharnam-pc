@@ -7,6 +7,7 @@
  * failure value its comment in bbhost_plugin.h gives and says so once in the log, so a plugin
  * written for bbhost meets an error it already handles, never a null pointer. */
 #include "plugin_host.h"
+#include "input_take.h"
 
 #include "bbhost_plugin.h"
 #include "engine_hooks.h"
@@ -679,10 +680,11 @@ static int api_input(BbInput *out) {
     if (r) memset(out, 0, sizeof *out);
     return r ? 1 : 0;
 }
+/* One taker for the whole host, as on bbhost: a call replaces the last, whichever plugin made it. */
 static int api_input_take(const uint16_t *scancodes, size_t n, uint32_t buttons, int wheel, int motion) {
-    (void)scancodes, (void)n, (void)buttons, (void)wheel, (void)motion;
-    missing("input_take");
-    return 1;
+    if (g_phase < PHASE_IMAGE || (n && !scancodes) || n > BB_TAKE_KEYS) return 1;
+    bb_input_take_set(scancodes, n, buttons, wheel, motion);
+    return 0;
 }
 static int api_on_camera(void (*fn)(BbCamera *, void *), void *user) {
     (void)fn, (void)user;

@@ -20,6 +20,11 @@
 #include "engine_hooks.h"
 #include "engine_features.h"
 #include "plugin_host.h"
+#include "plugin_game.h"
+#include "input_take.h"
+/* Inputs plugins take (input_take.h) are taken while the window says playing and the world has
+ * a player: never at the title, in a load or in a menu. */
+static int take_while_playing(void) { return bbgpu_plugin_playing() && bb_game_main_player() != 0; }
 #else
 #include <sys/mman.h>
 #include <malloc.h>
@@ -745,6 +750,7 @@ int main(int argc, char **argv) {
             /* show_message and show_text draw through the overlay (bbport_plugin_text.cpp). */
             bb_plugins_set_text(bbgpu_plugin_message, bbgpu_plugin_text);
             bb_plugins_set_input(bbgpu_plugin_input);
+            bb_input_take_set_playing(take_while_playing);
             printf("Engine hooks: %d installed\n", bb_engine_install());
             bbgpu_set_frame_callback(bb_engine_frame);
         }

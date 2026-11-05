@@ -84,6 +84,9 @@ int bbgpu_mouse_motion_take(float *dx, float *dy);
  * last call (bit 0 left, 1 right, 2 middle, 3 back, 4 forward); motion while playing and wheel
  * notches since the last call; playing: in the world, no menu or text box, the window focused.
  * Nothing held, pressed or moved while another window has the focus. 1 without a window. */
+/* Plugins' "playing" from the window's side: focused, no menu pointer, text box or overlay (the
+ * host also asks for a player in the world). Any thread. */
+int bbgpu_plugin_playing(void);
 int bbgpu_plugin_input(uint8_t keys[512], uint32_t *buttons, uint32_t *pressed, float *dx, float *dy,
                        float *wheel, int *playing);
 /* The menu pointer (src/menu_pointer.c): a menu owns the mouse, so the window shows the cursor

@@ -21,6 +21,7 @@
  *   FLICK_US, as a tap of a bound key does. BB_MOUSE_DEBUG=1 logs the lock and each flick.
  * - Through the monocular, the motion turns its view instead, at half the rate. */
 #include "mouse_camera.h"
+#include "input_take.h"
 
 #include "engine_hooks.h"
 #include "gpu/bbgpu.h"
@@ -123,6 +124,7 @@ static BB_GUEST_ABI void on_camera_update(BbRegs *regs) {
         return;
     }
     bbgpu_mouse_motion_take(&dx, &dy);
+    if (bb_input_take_motion()) dx = dy = 0;  /* a plugin took the motion (input_take.h) */
     const float scale = (float)setting("mouse_sensitivity", 10) / 10.0f;
     if (setting("mouse_invert_y", 0)) dy = -dy;
     const float pitch = dy / COUNTS_PER_RADIAN * scale, yaw = dx / COUNTS_PER_RADIAN * scale;
@@ -183,6 +185,7 @@ static void flick_tick(void) {
     }
     float dx = 0, dy = 0;
     bbgpu_mouse_motion_take(&dx, &dy);
+    if (bb_input_take_motion()) dx = dy = 0;
     const int threshold = setting("mouse_flick_threshold", 300);
     if (now < g_cooldown_until || threshold <= 0) {
         g_flick_counts = 0;

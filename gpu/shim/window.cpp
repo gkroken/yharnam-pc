@@ -513,6 +513,10 @@ extern "C" int bbgpu_mouse_stage_position(float* x, float* y) {
     return BbStage::Point(mx, my, ww, wh, fw, fh, x, y);
 }
 
+extern "C" int bbgpu_plugin_playing(void) {
+    return g_plugin_playing.load(std::memory_order_relaxed) ? 1 : 0;
+}
+
 extern "C" int bbgpu_plugin_input(uint8_t keys[512], uint32_t* buttons, uint32_t* pressed, float* dx, float* dy,
                                   float* wheel, int* playing) {
     std::memset(keys, 0, 512);

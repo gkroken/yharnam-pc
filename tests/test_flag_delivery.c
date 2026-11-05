@@ -16,6 +16,7 @@
 #include "engine_hooks.h"
 #include "plugin_game.h"
 #include "plugin_host.h"
+#include "input_take.h"
 
 #ifndef PLUGIN_DIR_D
 #error PLUGIN_DIR_D and PLUGIN_DIR_E name the test plugin folders
@@ -99,6 +100,8 @@ static int fake_input_headless(uint8_t keys[512], uint32_t *buttons, uint32_t *p
 typedef int (*InputFn)(BbInput *);
 static InputFn g_input;
 static int g_off_input = -1;
+
+int playing_now(void) { return 1; }
 
 static DWORD WINAPI off_main(LPVOID unused) {
     (void)unused;
@@ -244,6 +247,25 @@ int main(void) {
         memset(&in, 0xab, sizeof in);
         CHECK(g_input(&in) == 1 && in.key[4] == 0 && in.playing == 0);
         CHECK(g_input(NULL) == 1);
+    }
+
+    /* input_take: through to input_take.c (any thread); bad arguments refused, nothing changed. */
+    {
+        int (*take)(const uint16_t *, size_t, uint32_t, int) = (int (*)(const uint16_t *, size_t, uint32_t, int))export_of("late.dll", "take");
+        CHECK(take);
+        bb_input_take_set_playing(NULL);
+        const uint16_t f6[] = {63};
+        CHECK(take(NULL, 1, 0, 0) == 1 && take(f6, 513, 0, 0) == 1);
+        CHECK(take(f6, 1, 1, 1) == 0);
+        bool keys[512], scratch[512];
+        memset(keys, 1, sizeof keys);
+        int nk = 512;
+        CHECK(bb_input_take_keys(keys, &nk, scratch) == keys);  /* no playing test set: nothing taken */
+        bb_input_take_set_playing(playing_now);
+        const bool *seen = bb_input_take_keys(keys, &nk, scratch);
+        CHECK(seen == scratch && !seen[63] && seen[62] && bb_input_take_buttons() == 1 && bb_input_take_motion());
+        CHECK(take(NULL, 0, 0, 0) == 0 && !bb_input_take_active());  /* nothing taken: all given back */
+        bb_input_take_set_playing(NULL);
     }
 
     /* World loads: the player's block at ChrIns+0x3f8. Late registered in bb_plugin_image. */

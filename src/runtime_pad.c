@@ -34,6 +34,7 @@
 #include "runtime.h"
 #include "runtime_atlas_release.h"
 #include "mouse_camera.h"
+#include "input_take.h"
 #include "menu_pointer.h"
 #include "gpu/bbgpu.h"
 #include "input_bindings.h"
@@ -317,6 +318,9 @@ static void sample_host(PadData *d) {
      * it (bbgpu_atlas_route_pad), and sample_game hands the game neutral input afterwards. */
     int nkeys=0;
     const bool *k=SDL_WasInit(SDL_INIT_VIDEO) ? SDL_GetKeyboardState(&nkeys) : NULL;
+    /* Keys a plugin took (input_take.h) are up for the game while playing; menus keep them. */
+    bool taken_scratch[BB_TAKE_KEYS];
+    k=bb_input_take_keys(k,&nkeys,taken_scratch);
     if (g) {
         static const struct { SDL_GamepadButton sdl; uint32_t ps; } map[]={
             {SDL_GAMEPAD_BUTTON_SOUTH,BTN_CROSS}, {SDL_GAMEPAD_BUTTON_EAST,BTN_CIRCLE},
@@ -398,6 +402,10 @@ static void sample_host(PadData *d) {
         if (b & SDL_BUTTON_X1MASK) mouse|=1u<<3;
         if (b & SDL_BUTTON_X2MASK) mouse|=1u<<4;
         mouse|=bbgpu_mouse_wheel_take()<<5; /* a notch is a short press (bit 5 up, 6 down) */
+        /* Taken by a plugin while playing: the buttons (bits 0-4, BbInput's), and the notches,
+         * which are still taken above so none wait for later. */
+        mouse&=~bb_input_take_buttons();
+        if (bb_input_take_wheel()) mouse&=~(3u<<5);
     } else {
         k=NULL;
     }
