@@ -30,6 +30,9 @@ static std::atomic<uint32_t> g_plugin_pressed{0};
 // The mouse buttons held, in BbInput's bits, as this (SDL's) thread last saw them: SDL_GetMouseState
 // belongs on SDL's thread, so the game's thread reads this instead (port-c850d52-F1).
 static std::atomic<uint32_t> g_plugin_held{0};
+// Keys that went down since plugins last read, by scancode (16 x 32 bits): a tap that starts and
+// ends between two reads still reads as held once, so it is seen (tool-f2ab4ec-N1).
+static std::atomic<uint32_t> g_plugin_tapped[16]{};
 static std::atomic<int> g_window_points_w{0}, g_window_points_h{0};
 static bool g_pad_in_use = false; // window thread: the last input came from a controller
 static std::atomic<SDL_DisplayID> g_game_display{0}; // ChooseDisplay's answer, 0 before the window
@@ -302,6 +305,11 @@ bool WindowSDL::PollEvents() {
     }
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
+        if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && event.key.scancode > 0 &&
+            event.key.scancode < 512) {
+            g_plugin_tapped[event.key.scancode / 32].fetch_or(1u << (event.key.scancode % 32),
+                                                               std::memory_order_relaxed);
+        }
         if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN ||
             (event.type == SDL_EVENT_GAMEPAD_AXIS_MOTION &&
              (event.gaxis.value > 8000 || event.gaxis.value < -8000))) {
@@ -522,6 +530,9 @@ extern "C" int bbgpu_plugin_input(uint8_t keys[512], uint32_t* buttons, uint32_t
     if (!g_window_focused.load(std::memory_order_relaxed)) {
         *pressed = 0;
         *dx = *dy = *wheel = 0.0f;
+        for (auto& tapped : g_plugin_tapped) {
+            tapped.store(0, std::memory_order_relaxed);
+        }
         return 0; // another window has the keyboard: nothing is held for the game's
     }
     int n = 0;
@@ -529,8 +540,13 @@ extern "C" int bbgpu_plugin_input(uint8_t keys[512], uint32_t* buttons, uint32_t
     for (int i = 0; state && i < n && i < 512; ++i) {
         keys[i] = state[i] ? 1 : 0;
     }
+    for (int w = 0; w < 16; ++w) { // and what was tapped since the last read, held or not now
+        const uint32_t tapped = g_plugin_tapped[w].exchange(0, std::memory_order_relaxed);
+        for (int b = 0; b < 32; ++b) {
+            if (tapped >> b & 1) keys[w * 32 + b] = 1;
+        }
+    }
     *buttons = g_plugin_held.load(std::memory_order_relaxed); // SDL_GetKeyboardState above is any-thread
-
     *playing = g_plugin_playing.load(std::memory_order_relaxed) ? 1 : 0;
     return 0;
 }
