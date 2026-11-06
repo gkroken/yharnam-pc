@@ -416,6 +416,24 @@ class GameTalkTests(unittest.TestCase):
         self.assertEqual([(b, i, args[1]) for b, i, args in added],
                          [(1, 19, se.esd.done(se.esd.lit(15000000)))])
 
+    def test_the_menu_list_tells_menus_apart_and_says_which_take_an_option(self):
+        found = {(script, number): (entries, why) for script, number, entries, why in se.menus(self.cy)}
+        self.assertEqual(found[('t241335', 1)], ([(1, 14000100), (2, 14000101), (3, 14000102),
+                                                  (4, 14000103), (50, 15000005)], None))
+        dream = dcx_decompress((self.talk / 'm21_00_00_00.talkesdbnd.dcx').read_bytes())
+        found = {(script, number): (entries, why) for script, number, entries, why in se.menus(dream)}
+        self.assertEqual(found[('t210630', 1)][0], [(1, 15000150), (2, 15000005)])
+        self.assertEqual(found[('t210630', 2)][0], [(1, 70012010), (2, 70012020), (3, 70012030), (4, 70012040)])
+        hub = dcx_decompress((self.talk / 'm10_00_00_00.talkesdbnd.dcx').read_bytes())
+        (_s, _n, _e, why), = [m for m in se.menus(hub) if m[0] == 't100000']
+        self.assertEqual(why, "its menu isn't of the usual shape (the choice isn't read first)")
+        out = io.StringIO()
+        with unittest.mock.patch('sys.stdout', out):
+            self.assertEqual(se.main([str(GAME), 'm24_01_00_00']), 0)
+        self.assertIn('t241335 menu 1: takes an option; entries 1: text 14000100, 2: text 14000101', out.getvalue())
+        with unittest.mock.patch('sys.stderr', io.StringIO()):
+            self.assertEqual(se.main([str(GAME), 'm99_00_00_00']), 1)
+
     def test_refusals(self):
         # A menu with two branches for a closed menu (Gilbert's with its last one twice): which
         # one an added option should leave by is unknown, so it's refused.

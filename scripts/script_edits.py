@@ -447,3 +447,101 @@ def build(base, mods, out, log=print):
         written += 1
         log(f'Script edits: {relative.as_posix()}: {", ".join(applied)}')
     return Path(out) if written else None
+
+
+def _literal(code):
+    """The number an argument expression is, if it is a plain literal (else None)."""
+    if len(code) == 2 and code[1] == 0xa1 and 0x00 <= code[0] < 0x80:
+        return code[0] - 0x40
+    if len(code) == 6 and code[0] == 0x82 and code[5] == 0xa1:
+        return struct.unpack_from('<i', code, 1)[0]
+    return None
+
+
+CLEAR_LIST = (1, 20)  # ClearTalkListData: a talk list starts here
+
+
+def _entries(script, group, menu):
+    """[(index, text)] added on the way into the menu state: its own entry and the states that
+    lead to it in its group, back to where the list is cleared; each once, in state order."""
+    leads_to = {}
+    for si in group.states:
+        conds = script.states[si].conds
+        for c in (script.runs[conds].items if conds >= 0 else []):
+            leads_to.setdefault(script.conds[c].target, []).append(si)
+    seen, todo = {menu}, [menu]
+    while todo:
+        si = todo.pop()
+        entry = script.states[si].entry
+        ids = [(script.cmds[c].bank, script.cmds[c].id) for c in (script.runs[entry].items if entry >= 0 else [])]
+        if si != menu and (CLEAR_LIST in ids or SHOW_MENU in ids):
+            continue  # the list starts here, or another menu ends: don't go further back
+        for before in leads_to.get(si, []):
+            if before not in seen:
+                seen.add(before)
+                todo.append(before)
+    entries = []
+    for si in group.states:
+        entry = script.states[si].entry
+        if si not in seen or entry < 0:
+            continue
+        for c in script.runs[entry].items:
+            cmd = script.cmds[c]
+            if (cmd.bank, cmd.id) == ADD_TO_LIST and cmd.args >= 0:
+                args = [_literal(script.exprs[i].code) for i in script.runs[cmd.args].items]
+                if len(args) >= 2 and (args[0], args[1]) not in entries:
+                    entries.append((args[0], args[1]))
+    return entries
+
+
+def menus(data):
+    """For a talk archive (BND4 bytes): [(script, menu number, [(index, text)], why not or None)]
+    for every talk menu, in file order. The entries are the talk-list adds of the menu's state
+    group; "why not" is why an option can't be added (None: it can)."""
+    archive = Bnd4(data)
+    found = []
+    for name, esd_data in zip(archive.names, archive.files):
+        short = name.replace('\\', '/').rsplit('/', 1)[-1]
+        if not short.casefold().endswith('.esd'):
+            continue
+        short = short[:-4]
+        script = esd.parse(esd_data)
+        number = 0
+        for group in script.groups:
+            for si in group.states:
+                state = script.states[si]
+                if state.entry < 0 or SHOW_MENU not in [(script.cmds[c].bank, script.cmds[c].id)
+                                                        for c in script.runs[state.entry].items]:
+                    continue
+                number += 1
+                entries = _entries(script, group, si)
+                try:
+                    add_option(esd_data, TalkOption(short, 0, 1, number))
+                    why = None
+                except EditError as error:
+                    why = str(error).removeprefix(f'{short}: ')
+                found.append((short, number, entries, why))
+    return found
+
+
+def main(argv=None):
+    import argparse
+    parser = argparse.ArgumentParser(description='List the talk menus of one map\'s talk scripts, '
+                                     'for writing talk edits (menu numbers, entries, whether an '
+                                     'option can be added).')
+    parser.add_argument('game', type=Path, help='the game folder (with dvdroot_ps4)')
+    parser.add_argument('map', help='the map, such as m24_01_00_00')
+    args = parser.parse_args(argv)
+    path = _child(_child(_child(args.game, 'dvdroot_ps4'), 'script'), 'talk') / f'{args.map}.talkesdbnd.dcx'
+    if not path.is_file():
+        print(f'no {path}', file=sys.stderr)
+        return 1
+    for script, number, entries, why in menus(dcx_decompress(path.read_bytes())):
+        listed = ', '.join(f'{index}: text {text}' for index, text in entries) or 'none found in its group'
+        verdict = 'takes an option' if why is None else f'can\'t take an option ({why})'
+        print(f'{script} menu {number}: {verdict}; entries {listed}')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
