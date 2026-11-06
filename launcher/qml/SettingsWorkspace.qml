@@ -396,6 +396,54 @@ Item {
                         GlassButton { text: "Refresh"; width: 110; height: 38; onClicked: launcher.refresh_addons() }
                         GlassButton { text: "Open mods folder"; width: 160; height: 38; onClicked: launcher.action("openMods") }
                     }
+                    // Plugins (DLLs) and Lua scripts: read from their files by bbport_plugins, never run here.
+                    Note { visible: is("Mods & Patches", "Plugins and scripts"); text: "Plugins and Lua scripts run code while the game plays. A change applies the next time the game starts. Online play leaves out every plugin marked as changing the game." }
+                    Repeater {
+                        model: is("Mods & Patches", "Plugins and scripts") ? launcher.pluginRows : []
+                        delegate: Item {
+                            width: detailColumn.width; height: Math.max(64, pluginText.implicitHeight + 22)
+                            Column {
+                                id: pluginText; x: 2; anchors.verticalCenter: parent.verticalCenter; width: parent.width - 80; spacing: 3
+                                Row { spacing: 8
+                                    Text { text: modelData.title + (modelData.version !== "" ? "  " + modelData.version : ""); color: Theme.text; font.family: Theme.sans; font.pixelSize: 14 }
+                                    Rectangle {
+                                        visible: modelData.gameplay; anchors.verticalCenter: parent.verticalCenter
+                                        width: gameplayBadge.implicitWidth + 12; height: 18; radius: 3; color: Theme.accentSoft
+                                        Text { id: gameplayBadge; anchors.centerIn: parent; text: "Changes the game"; color: Theme.warn; font.family: Theme.sans; font.pixelSize: 11 }
+                                    }
+                                }
+                                Text { visible: modelData.description !== ""; width: parent.width; text: modelData.description; color: Theme.textDim; font.family: Theme.sans; font.pixelSize: 12; wrapMode: Text.WordWrap }
+                                Text { width: parent.width; text: modelData.next; color: modelData.loads ? Theme.good : Theme.textFaint; font.family: Theme.sans; font.pixelSize: 12; wrapMode: Text.WordWrap }
+                                Text { visible: modelData.lastRun !== ""; width: parent.width; text: modelData.lastRun; color: modelData.lastOk ? Theme.textFaint : Theme.warn; font.family: Theme.sans; font.pixelSize: 12; wrapMode: Text.WordWrap }
+                            }
+                            GlassSwitch {
+                                anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+                                checked: modelData.enabled && modelData.canSwitch; enabled: modelData.canSwitch; opacity: enabled ? 1 : 0.4
+                                onToggled: launcher.setPlugin(modelData.name, checked)
+                            }
+                            Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.line }
+                        }
+                    }
+                    Note { visible: is("Mods & Patches", "Plugins and scripts") && launcher.pluginRows.length === 0; text: "No plugins yet. Put plugin DLLs in the plugins folder beside your saves, then refresh." }
+                    Text { visible: is("Mods & Patches", "Plugins and scripts"); topPadding: 10; text: "Lua scripts"; color: Theme.text; font.family: Theme.sans; font.pixelSize: 15 }
+                    Note { visible: is("Mods & Patches", "Plugins and scripts") && launcher.luaNote !== ""; text: launcher.luaNote; color: Theme.warn }
+                    Repeater {
+                        model: is("Mods & Patches", "Plugins and scripts") ? launcher.scriptRows : []
+                        delegate: Item {
+                            width: detailColumn.width; height: Math.max(40, scriptText.implicitHeight + 14)
+                            Column {
+                                id: scriptText; x: 2; anchors.verticalCenter: parent.verticalCenter; width: parent.width; spacing: 2
+                                Text { text: modelData.name; color: modelData.enabled ? Theme.text : Theme.textFaint; font.family: Theme.sans; font.pixelSize: 13 }
+                                Text { visible: modelData.state !== ""; width: parent.width; text: modelData.state; color: modelData.ok ? Theme.textFaint : Theme.warn; font.family: Theme.sans; font.pixelSize: 12; wrapMode: Text.WordWrap }
+                            }
+                            Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.line }
+                        }
+                    }
+                    Note { visible: is("Mods & Patches", "Plugins and scripts") && launcher.scriptRows.length === 0; text: "No scripts yet. Put .lua files in plugins\\lua beside your saves, or in a mod's scripts folder." }
+                    Row { visible: is("Mods & Patches", "Plugins and scripts"); spacing: 10
+                        GlassButton { text: "Refresh"; width: 110; height: 38; onClicked: launcher.refresh_addons() }
+                        GlassButton { text: "Open plugins folder"; width: 180; height: 38; onClicked: launcher.action("openPlugins") }
+                    }
                     Repeater { model: is("Mods & Patches", "External patches") ? launcher.patches : []
                         delegate: GlassSwitch { text: modelData.name; checked: modelData.enabled; onToggled: launcher.setPatch(modelData.name, checked) }
                     }

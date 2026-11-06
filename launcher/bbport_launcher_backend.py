@@ -202,6 +202,7 @@ SETTINGS_SECTIONS = {
     ],
     'Mods & Patches': [
         ('Installed mods', ['mods_enabled', 'mods_dir']),
+        ('Plugins and scripts', []),
         ('Built-in enhancements', [key for key, _, _ in core.ENHANCEMENTS]),
         ("Hunter's Atlas (map)", [key for key, _, _ in core.ATLAS] + ['atlas_npc_mode']),
         ('External patches', ['patches_dir']),
@@ -236,6 +237,7 @@ SEARCH_ACTIONS = [
     ('Game & Saves', 'Your data', 'Open saves folder', 'save path'),
     ('Online', "The Hunter's Dream", 'Sign in with Discord', 'discord account hunters dream thd online'),
     ('Mods & Patches', 'Installed mods', 'Refresh mods', 'load order'),
+    ('Mods & Patches', 'Plugins and scripts', 'Plugins', 'plugin dll lua script bb_lua'),
     ('System', 'Launch', 'Desktop shortcut', 'start menu'),
     ('System', 'Launch', 'Add to Steam', 'integration'),
     ('System', 'Logs', 'Copy log', 'activity diagnostics'),
@@ -288,6 +290,7 @@ class LauncherBackend(QObject):
         self._notice = 'Ready to hunt.'
         self._mods = []
         self._patches = []
+        self._plugin_page = {'plugins': [], 'scripts': [], 'luaNote': ''}
         # A newer release found earlier (a direct launch checks quietly): shown at once.
         self._update = core.remembered_update() if self.app.get('check_updates') else None
         self._settings_revision = 0
@@ -1042,6 +1045,7 @@ class LauncherBackend(QObject):
                           'enabled': name in enabled or (name not in denied and
                                        meta.get('isEnabled', 'false').lower() == 'true')}
                          for name, _path, meta in found]
+        self._refresh_plugins()
         self.changed.emit()
 
     @Slot(str, bool)
@@ -1087,6 +1091,58 @@ class LauncherBackend(QObject):
         (disabled_names.discard if enabled else disabled_names.add)(name)
         profile.update({'enabled': sorted(enabled_names), 'disabled': sorted(disabled_names)})
         profile_file.write_text(json.dumps(profile, indent=2), encoding='utf-8')
+        self.refresh_addons()
+
+    def _user_dir(self):
+        return Path(self.app.get('user_dir') or core.DATA_DIR / 'user')
+
+    def _game_env(self, key):
+        """A variable as the game will get it: the launcher's environment, then Extra environment variables."""
+        value = os.environ.get(key, '')
+        for item in str(self.app.get('extra_env') or '').split():
+            if item.startswith(key + '='):
+                value = item.split('=', 1)[1]
+        return value
+
+    def _refresh_plugins(self):
+        """The Mods page's plugins and Lua scripts (bbport_plugins: read from the files, never run)."""
+        import bbport_plugins
+        user = self._user_dir()
+        try:
+            log = (user / 'last_run.log').read_text(encoding='utf-8', errors='replace')
+        except OSError:
+            log = None
+        # Online play leaves out the plugins that change the game: the launcher's own rule for BB_ONLINE.
+        online = bool(self.app.get('online')) and core.play_mode(self.app) == 'huntersdream' and not core.thd_refused()
+        mods = [(m['name'], self._mods_dir() / m['name'], m['enabled']) for m in self._mods]
+        self._plugin_page = bbport_plugins.page_rows(core.DATA_DIR, user, mods, online=online,
+                                                     all_off=self._game_env('BB_PLUGINS') == '0', log_text=log)
+
+    @Property('QVariantList', notify=changed)
+    def pluginRows(self):
+        return self._plugin_page['plugins']
+
+    @Property('QVariantList', notify=changed)
+    def scriptRows(self):
+        return self._plugin_page['scripts']
+
+    @Property(str, notify=changed)
+    def luaNote(self):
+        return self._plugin_page['luaNote']
+
+    @Slot(str, bool)
+    def setPlugin(self, name, enabled):
+        """[plugins] <name> = 1 or 0 in plugins.ini beside the saves: the line the game reads, nothing else."""
+        import bbport_plugins
+        ini = bbport_plugins.PluginsIni(self._user_dir() / 'plugins.ini')
+        ini.set_switch(name, enabled)
+        try:
+            ini.save()
+        except OSError as error:
+            self._set_notice(f"Couldn't save plugins.ini: {error}")
+        else:
+            self._set_notice('Plugin change saved. Restart the game to apply it.' if self.running
+                             else 'Plugin change saved. It applies the next time the game starts.')
         self.refresh_addons()
 
     def _mods_dir(self):
@@ -1765,6 +1821,10 @@ class LauncherBackend(QObject):
             self.openFolder('user_dir')
         elif name == 'openMods':
             self.openFolder('mods_dir')
+        elif name == 'openPlugins':
+            folder = self._user_dir() / 'plugins'
+            folder.mkdir(parents=True, exist_ok=True)
+            os.startfile(str(folder))
         elif name == 'openPort':
             self.openFolder('')
         elif name == 'openConfig':

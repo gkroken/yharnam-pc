@@ -363,5 +363,72 @@ class LuaScriptTests(Folder):
                          [('A', '', True), ('b', '', True), ('m2/main', 'm2', False), ('m1/main', 'm1', True)])
 
 
+class PageRowsTests(Folder):
+    """page_rows(): what the Mods page shows, in the words it shows it."""
+
+    def setUp(self):
+        super().setUp()
+        dll = lambda folder, file, **info: self.put(f'{folder}/plugins/{file}', Dll().plugin().info(**info).bytes())
+        dll('data', 'bb_lua.dll', name='lua', title='', version='0.1.0', description='')
+        dll('data', 'boss.dll', name='boss', title='Boss rush', version='2.0', description='Bosses.',
+            flags=bp.GAMEPLAY)
+        dll('data/user', 'later.dll', name='later', flags=bp.OPT_IN)
+        dll('data/user', 'gone.dll', name='gone')
+        self.put('data/user/plugins/broken.dll', b'MZ')
+        self.put('data/user/plugins/lua/hello.lua', '-- x')
+        self.put('data/user/plugins/lua/bad.lua', '-- x')
+        self.put('mods/off_mod/scripts/main.lua', '-- x')
+        self.log = '\n'.join([
+            r'Plugins: lua 0.1.0 (C:\d\plugins\bb_lua.dll)',
+            r'Plugins: boss 2.0 (C:\d\plugins\boss.dll)',
+            'Plugins: boss: bb_plugin_image returned 1; unloaded',
+            r'Plugins: C:\d\user\plugins\gone.dll: could not be loaded (Windows error 126)',
+            r'Plugin lua: hello: loaded (C:\d\user\plugins\lua\hello.lua)',
+            'Plugin lua: bad: stopped: bad.lua:1: oops',
+        ])
+
+    def rows(self, **kw):
+        page = bp.page_rows(self.data, self.user, [('off_mod', self.root / 'mods/off_mod', False)], **kw)
+        return page, {r['file']: r for r in page['plugins']}
+
+    def test_plugins(self):
+        page, rows = self.rows(log_text=self.log)
+        self.assertEqual(list(rows), ['bb_lua.dll', 'boss.dll', 'broken.dll', 'gone.dll', 'later.dll'])
+        lua, boss, broken, gone, later = rows.values()
+        self.assertEqual((lua['title'], lua['next'], lua['lastRun'], lua['lastOk']),
+                         ('lua', 'Loads at the next start', 'Last run: loaded', True))
+        self.assertEqual((boss['title'], boss['version'], boss['description'], boss['gameplay']),
+                         ('Boss rush', '2.0', 'Bosses.', True))
+        self.assertEqual((boss['lastRun'], boss['lastOk']), ('Last run: stopped at its start (bb_plugin_image returned 1)', False))
+        self.assertFalse(broken['canSwitch'])
+        self.assertTrue(broken['next'].startswith("Can't load: can't be read"))
+        self.assertEqual(gone['lastRun'], "Last run: Windows couldn't load it (Windows error 126)")
+        self.assertEqual((later['enabled'], later['loads'], later['next']),
+                         (False, False, 'Left out at the next start: off until turned on in plugins.ini (opt-in)'))
+        self.assertEqual(page['luaNote'], '')
+        _, online = self.rows(online=True)
+        self.assertEqual(online['boss.dll']['next'], 'Left out at the next start: changes the game, and this is online play')
+        switched_off = self.log + '\n' + r'Plugins: later (C:\d\user\plugins\later.dll): left out, off until turned on in plugins.ini (opt-in)'
+        _, rows = self.rows(log_text=switched_off + '\n' + r'Plugins: x (C:\d\plugins\boss.dll): left out, another plugin has its name')
+        self.assertTrue(rows['later.dll']['lastOk'])   # off by the player's choice: not a problem
+        self.assertFalse(rows['boss.dll']['lastOk'])   # left out for another reason: one
+        _, fresh = self.rows()  # no log yet
+        self.assertEqual((fresh['boss.dll']['lastRun'], fresh['boss.dll']['lastOk']), ('', True))
+
+    def test_scripts_and_the_lua_note(self):
+        page, _ = self.rows(log_text=self.log)
+        self.assertEqual([(s['name'], s['state'], s['ok']) for s in page['scripts']], [
+            ('bad', 'Last run: stopped: bad.lua:1: oops', False),
+            ('hello', 'Last run: running', True),
+            ('off_mod/main', 'Off with its mod', True),
+        ])
+        self.put('data/user/plugins.ini', '[plugins]\nlua = off\n')
+        page, _ = self.rows()
+        self.assertEqual(page['luaNote'], 'No script runs: the Lua plugin is left out (off in plugins.ini).')
+        (self.data / 'plugins' / 'bb_lua.dll').unlink()
+        page, _ = self.rows()
+        self.assertEqual(page['luaNote'], 'Lua scripts need bb_lua.dll in a plugins folder.')
+
+
 if __name__ == '__main__':
     unittest.main()

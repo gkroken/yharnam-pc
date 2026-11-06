@@ -424,3 +424,60 @@ def lua_scripts(user_dir, mods=()):
     for name, path, enabled in mods:
         folder(Path(path) / 'scripts', f'{name}/', name, bool(enabled))
     return out
+
+
+_LAST_RUN = {
+    'loaded': 'Last run: loaded',
+    'left out': 'Last run: left out ({why})',
+    'unloaded': 'Last run: stopped at its start ({why})',
+    'failed': "Last run: Windows couldn't load it ({why})",
+}
+
+
+def page_rows(data_dir, user_dir, mods=(), online=False, all_off=False, log_text=None):
+    """What the Mods page shows, worded here so it's tested: every plugin with its switch, what the
+    next start will do and what the last run did; every Lua script; and a line about the Lua host.
+
+    mods: (name, folder, enabled) as for lua_scripts(). log_text: the last run's log, or None."""
+    run = last_run(log_text) if log_text else {'plugins': {}, 'scripts': {}}
+    plugins = scan(data_dir, user_dir, online=online, all_off=all_off)
+    rows = []
+    for p in plugins:
+        if p.loads:
+            next_start = 'Loads at the next start'
+        elif p.problem:
+            next_start = f"Can't load: {p.problem}"
+        else:
+            next_start = f'Left out at the next start: {p.why}'
+        last = run['plugins'].get(p.file)
+        rows.append({
+            'file': p.file, 'name': p.name, 'title': p.title or p.name, 'version': p.version,
+            'author': p.author, 'description': p.description, 'gameplay': p.gameplay, 'optIn': p.opt_in,
+            'enabled': p.enabled, 'canSwitch': not p.problem, 'loads': p.loads, 'next': next_start,
+            'lastRun': _LAST_RUN[last['state']].format(why=last['why']) if last else '',
+            # Only a problem is drawn as one: left out because the player turned it off isn't.
+            'lastOk': (last['state'] == 'loaded' or (last['state'] == 'left out' and last['why'].startswith('off')))
+                      if last else True,
+            'settings': len(p.options),
+        })
+    scripts = []
+    for s in lua_scripts(user_dir, mods):
+        last = run['scripts'].get(s['name'])
+        if not s['enabled']:
+            state = 'Off with its mod'
+        elif last and last['state'] == 'stopped':
+            state = f"Last run: stopped: {last['why']}"
+        elif last:
+            state = 'Last run: running'
+        else:
+            state = ''
+        scripts.append({'name': s['name'], 'mod': s['mod'], 'enabled': s['enabled'], 'state': state,
+                        'ok': not (last and last['state'] == 'stopped')})
+    lua = next((p for p in plugins if p.name.lower() == 'lua'), None)
+    if lua is None:
+        lua_note = 'Lua scripts need bb_lua.dll in a plugins folder.'
+    elif not lua.loads:
+        lua_note = f'No script runs: the Lua plugin is left out ({lua.why}).'
+    else:
+        lua_note = ''
+    return {'plugins': rows, 'scripts': scripts, 'luaNote': lua_note}

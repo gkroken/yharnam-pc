@@ -21,6 +21,10 @@ them. `BB_PLUGIN_DIRS` (separated by `;`) replaces both folders; the tests use i
 
 - **All of them:** `BB_PLUGINS=0` loads none. `BB_ENGINE_HOOKS=0` turns off the engine hooks, and
   plugins with them.
+- **In the launcher:** Settings > Mods & Patches > Plugins and scripts lists every plugin and Lua
+  script with a switch, what the next start will do and what the last run did (read from the
+  DLLs' files and `last_run.log`; the launcher never loads a plugin). Its switches write the
+  `[plugins]` lines below.
 - **One at a time:** `<user>\plugins.ini`:
   ```ini
   [plugins]
