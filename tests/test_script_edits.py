@@ -2,6 +2,7 @@
 """Mods' event edits (scripts/script_edits.py), on a small event file made here: no game needed.
 With BB_TEST_GAME_DIR, also on the game's own m24_01_00_00 (Central Yharnam)."""
 from paths import ROOT
+import io
 import os
 from pathlib import Path
 import struct
@@ -9,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 
 sys.path.insert(0, str(ROOT / 'scripts'))
 import script_edits as se  # noqa: E402
@@ -267,6 +269,22 @@ class ModsMergeTests(unittest.TestCase):
         self.assertIn('Script edits: Boom: m24_01_00_00.emevd.edit.toml: could not be applied '
                       '(RecursionError: deep); left out. Please report this.', lines)
         self.assertIn('Script edits: dvdroot_ps4/event/m24_01_00_00.emevd.dcx: Good', lines)
+
+    def test_the_layer_never_stops_the_start(self):
+        # port-bb0dcc1-N1: whatever escapes build() (here an error reading the layers' files),
+        # script_edits_layer says so and gives no layer; mods.py goes on.
+        sys.path.insert(0, str(ROOT / 'scripts'))
+        import mods
+        real = mods.resolved
+        mods.resolved = lambda game, layers: (_ for _ in ()).throw(MemoryError('out of memory'))
+        try:
+            with unittest.mock.patch('sys.stderr', new_callable=io.StringIO) as err:
+                layer = mods.script_edits_layer(self.game, [('A', self.mods / 'A')], set(),
+                                                self.root / 'out/script_edits')
+        finally:
+            mods.resolved = real
+        self.assertEqual(layer, [])
+        self.assertIn('Script edits: none applied (MemoryError: out of memory)', err.getvalue())
 
     def test_the_folder_names_agree_with_mods_py(self):
         sys.path.insert(0, str(ROOT / 'scripts'))
