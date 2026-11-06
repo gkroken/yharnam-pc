@@ -14,7 +14,7 @@ import unittest
 # test_mods' link tests aren't here: they expect a Windows user without the symlink privilege,
 # and the runner is an administrator (5 failed at bb0dcc1); they run in the local gate
 # (tools/test-port.sh). The branch's own test in that module is named by id (port-a916d5d-F1).
-MODULES = ['test_launcher_plugins', 'test_paramdefs', 'test_probe', 'test_script_edits',
+MODULES = ['test_launcher_plugins', 'test_paramdefs', 'test_probe', 'test_script_edits', 'test_script_convert',
            'test_mods.ModTests.test_scripts_only_mod_is_a_mod_with_no_files']
 # Full id -> why it isn't run here.
 DESELECT = {
