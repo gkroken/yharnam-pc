@@ -303,6 +303,31 @@ class ModTests(unittest.TestCase):
         self.assertIn('several folders', found['Two'])
         self.assertEqual(found['Empty'], 'empty')
 
+    def test_scripts_only_mod_is_a_mod_with_no_files(self):
+        # bb_lua loads <mod>/scripts/*.lua: such a mod is listed (turned off and ordered in the
+        # launcher), links nothing, and its scripts folder doesn't hide a wrapped mod's files.
+        (self.moddir / 'Lua/scripts').mkdir(parents=True)
+        (self.moddir / 'Lua/scripts/main.lua').write_text('bb.log("hi")')
+        (self.moddir / 'Both/Both v1/dvdroot_ps4/chr').mkdir(parents=True)
+        (self.moddir / 'Both/Both v1/dvdroot_ps4/chr/a.dcx').write_bytes(b'both')
+        (self.moddir / 'Both/scripts').mkdir()
+        (self.moddir / 'Both/scripts/main.lua').write_text('bb.log("both")')
+        (self.moddir / 'NoLua/scripts').mkdir(parents=True)
+        (self.moddir / 'NoLua/scripts/notes.txt').write_text('not a script')
+        (self.moddir / 'Deeper/lua').mkdir(parents=True)
+        (self.moddir / 'Deeper/lua/main.lua').write_text('bb.log("where bb_lua never looks")')
+        self.assertEqual(mods.discover(self.moddir), ['Both', 'Lua'])
+        found = dict(mods.unrecognized(self.moddir))
+        self.assertEqual(sorted(found), ['Deeper', 'NoLua'])
+        self.assertIn('Deeper/scripts/', found['Deeper'])
+        self.assertEqual(list(mods.mod_files(self.moddir / 'Lua')), [])
+        result = mods.build_overlay(self.game, self.root / 'out',
+                                    [('Lua', self.moddir / 'Lua'), ('Both', self.moddir / 'Both')])
+        self.assertEqual((result / 'dvdroot_ps4/chr/a.dcx').read_bytes(), b'both')
+        self.assertFalse((result / 'scripts').exists())
+        self.assertEqual(mods.build_overlay(self.game, self.root / 'out2', [('Lua', self.moddir / 'Lua')]),
+                         self.game.resolve())
+
     def test_invalid_profile_fails(self):
         self.mod('A')
         config = self.root / 'mods.json'

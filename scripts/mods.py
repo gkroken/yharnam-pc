@@ -32,6 +32,22 @@ def child(folder, name):
 EXTRA_SUFFIXES = {'', '.txt', '.md', '.ini', '.json', '.pdf', '.rtf', '.nfo', '.url', '.htm', '.html',
                   '.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'}
 ARCHIVE_SUFFIXES = {'.zip', '.7z', '.rar'}
+# What a mod may carry at its top besides game files: Lua scripts (scripts/*.lua), which the
+# plugins branch's bb_lua loads from there. They are never linked into the game, and a mod of
+# only these is still a mod, so the launcher lists it, turns it off and orders it.
+SCRIPTS_FOLDER = 'scripts'
+
+
+def has_scripts(folder):
+    """Whether `folder` has Lua scripts where bb_lua loads a mod's: <mod>/scripts/*.lua."""
+    scripts = child(folder, SCRIPTS_FOLDER)
+    return scripts.is_dir() and any(e.is_file() and e.suffix.casefold() == '.lua'
+                                    for e in scripts.iterdir())
+
+
+def is_mod(folder):
+    """A mod: game files in an accepted layout (content_root), or scripts only."""
+    return Path(folder).is_dir() and bool(content_root(folder) or has_scripts(folder))
 
 
 def content_root(folder, depth=0):
@@ -52,7 +68,9 @@ def content_root(folder, depth=0):
         if dvdroot.is_dir():
             return base, ''
     entries = [e for e in folder.iterdir() if not e.name.startswith('.')]
-    folders = [e for e in entries if e.is_dir()]
+    # The mod's own scripts folder isn't a wrapper around its files (<mod>/<mod v1>/dvdroot_ps4
+    # beside <mod>/scripts).
+    folders = [e for e in entries if e.is_dir() and (depth or e.name.casefold() != SCRIPTS_FOLDER)]
     if any(e.name.casefold() in GAME_FOLDERS for e in folders):
         return folder, 'dvdroot_ps4'
     if depth < 3 and len(folders) == 1 and not [e for e in entries if e.is_file() and
@@ -69,6 +87,8 @@ def problem(folder):
         return 'empty'
     if any(e.suffix.casefold() in ARCHIVE_SUFFIXES for e in files):
         return 'still an archive: extract it here'
+    if any(e.suffix.casefold() == '.lua' for e in files):
+        return f'Lua scripts go in {folder.name}/{SCRIPTS_FOLDER}/, directly in the mod folder'
     folders = [e for e in folder.iterdir() if e.is_dir() and not e.name.startswith('.')]
     if len(folders) > 1:
         return ('several folders: put each mod in its own folder in Mods (each with dvdroot_ps4, '
@@ -82,16 +102,16 @@ def unrecognized(root):
     if not root.is_dir():
         return []
     return sorted(((p.name, problem(p)) for p in root.iterdir()
-                   if p.is_dir() and not p.name.startswith('.') and not content_root(p)),
+                   if p.is_dir() and not p.name.startswith('.') and not is_mod(p)),
                   key=lambda item: (item[0].casefold(), item[0]))
 
 
 def discover(root):
-    """Named mods: folders of `root` with an accepted layout (content_root)."""
+    """Named mods: folders of `root` with an accepted layout (is_mod)."""
     root = Path(root)
     if not root.is_dir():
         return []
-    return sorted((p.name for p in root.iterdir() if p.is_dir() and content_root(p)),
+    return sorted((p.name for p in root.iterdir() if is_mod(p)),
                   key=lambda name: (name.casefold(), name))
 
 
@@ -115,6 +135,8 @@ def selected(root, config):
 def mod_files(folder):
     """(game path, source) of every file a mod replaces or adds under dvdroot_ps4."""
     layout = content_root(folder)
+    if not layout and has_scripts(folder):
+        return  # scripts only: nothing to link
     if not layout:
         raise ValueError(f'{folder}: expected dvdroot_ps4 (or chr/, parts/, ...) inside the mod folder')
     root, prefix = layout
