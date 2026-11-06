@@ -19,6 +19,19 @@ An instruction is a built-in name with its arguments (INSTRUCTIONS; an enum argu
 names, such as ON or MAIN), or raw: bank, id and typed arguments (u8, s8, u16, s16, u32, s32,
 f32), packed as the game reads them (each aligned to its size, the whole to 4 bytes).
 
+A mod adds an option to an NPC's talk menu with `edits/talk/<map>.talk.edit.toml`, which edits
+`script/talk/<map>.talkesdbnd.dcx`:
+
+    [[option]]
+    script = "t241335"            # the talk script in that file (t<...>.esd)
+    text = 15000000               # the message the option shows: an id of the game's talk text
+    flag = 12401902               # turned on when the option is picked; the talk then ends
+    menu = 1                      # optional: which menu, when the script has two (1 or 2)
+
+The option goes last in the menu, and nothing else in the script changes: an event (an event
+edit) can wait for its flag. Only menus of the game's usual shape take one (the choice read and kept, one branch
+for a closed menu or Leave); any other is refused.
+
 Every edit of every mod goes on top of the file the layers below give (the game's, or a mod's
 replacement), in mod order, so two mods can add events to one file. One mod's edit file is
 applied whole or not at all: one that fails (a bad name, an event id the file already has) is
@@ -32,11 +45,13 @@ import sys
 import tomllib
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import esd  # noqa: E402
 from emevd import Emevd, EmevdError  # noqa: E402
-from fromsoft import FormatError, dcx_compress, dcx_decompress  # noqa: E402
+from fromsoft import Bnd4, FormatError, dcx_compress, dcx_decompress  # noqa: E402
 
 EDITS_FOLDER = 'edits'
 EVENT_SUFFIX = '.emevd.edit.toml'
+TALK_SUFFIX = '.talk.edit.toml'
 
 
 class EditError(ValueError):
@@ -231,6 +246,140 @@ def apply(data, events):
         raise EditError(str(error)) from None
 
 
+@dataclass
+class TalkOption:
+    script: str
+    text: int
+    flag: int
+    menu: int = 1
+
+
+def parse_talk(text):
+    """The options of one talk edit file's TOML text."""
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as error:
+        raise EditError(f'not valid TOML ({error})') from None
+    if set(data) - {'option'}:
+        raise EditError(f'unknown keys {sorted(set(data) - {"option"})}: a talk edit file has [[option]] tables')
+    options = data.get('option', [])
+    if not isinstance(options, list) or not options:
+        raise EditError('no [[option]] tables')
+    result = []
+    for number, option in enumerate(options, 1):
+        where = f'option {number}'
+        unknown = set(option) - {'script', 'text', 'flag', 'menu'}
+        if unknown:
+            raise EditError(f'{where}: unknown keys {sorted(unknown)}')
+        script = option.get('script')
+        if not isinstance(script, str) or not script.startswith('t') or not script[1:].isdigit():
+            raise EditError(f'{where}: script is a talk script\'s name, such as "t241335"')
+        values = {}
+        for key, low in (('text', 0), ('flag', 1)):
+            value = option.get(key)
+            if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= 0x7fffffff:
+                raise EditError(f'{where}: {key} must be a number from {low}')
+            values[key] = value
+        menu = option.get('menu', 1)
+        if isinstance(menu, bool) or menu not in (1, 2):
+            raise EditError(f'{where}: menu is 1 or 2')
+        result.append(TalkOption(script, values['text'], values['flag'], menu))
+    return result
+
+
+SHOW_MENU = (1, 10)      # ShowShopMessage: shows the talk list built before it
+ADD_TO_LIST = (1, 19)    # AddTalkListData(index, text, -1)
+SET_FLAG = (1, 11)       # SetEventFlag(flag, state)
+# The menu's first condition reads the choice (GetTalkListEntryResult, call 23) and keeps it in
+# register 0 (0xa7); the others read it back (0xaf). The branch that ends the talk compares it
+# with 0 (the menu closed), in the first condition or a later one, or asks whether the menu is
+# closed (call 53 == 0). Seen in 51 of the game's 53 menus.
+READ_CHOICE = esd.lit(23) + b'\x84\xa7'
+CLOSED = (b'\xaf' + esd.lit(0) + b'\x95', READ_CHOICE + esd.lit(0) + b'\x95',
+          esd.call(53, []) + esd.lit(0) + b'\x95')
+EQ = b'\x95'
+
+
+def add_option(data, option):
+    """The talk script `data` (.esd bytes) with `option` added to its menu."""
+    script = esd.parse(data)
+    menus = [(g, si) for g in script.groups for si in g.states
+             if script.states[si].entry >= 0 and SHOW_MENU in
+             [(script.cmds[c].bank, script.cmds[c].id) for c in script.runs[script.states[si].entry].items]]
+    if not menus:
+        raise EditError(f'{option.script} has no talk menu')
+    if option.menu > len(menus):
+        raise EditError(f'{option.script} has {len(menus)} menu(s), not {option.menu}')
+    group, site = menus[option.menu - 1]
+    state = script.states[site]
+    if group.states and group.states[0] == site:
+        raise EditError(f'{option.script}: its menu is where its state group starts, which this can\'t edit')
+    conds = list(script.runs[state.conds].items) if state.conds >= 0 else []
+    codes = [script.exprs[script.conds[c].eval].code for c in conds]
+    if not codes or not codes[0].startswith(READ_CHOICE):
+        raise EditError(f'{option.script}: its menu isn\'t of the usual shape (the choice isn\'t read first)')
+    closing = [k for k, code in enumerate(codes) if any(mark in code for mark in CLOSED)]
+    if len(closing) != 1:
+        raise EditError(f'{option.script}: its menu isn\'t of the usual shape '
+                        f'({len(closing)} branches for a closed menu)')
+    leave = script.conds[conds[closing[0]]].target
+    # The new entry's index: one past every index the script's talk lists use.
+    used = []
+    for cmd in script.cmds:
+        if (cmd.bank, cmd.id) == ADD_TO_LIST and cmd.args >= 0 and script.runs[cmd.args].items:
+            code = script.exprs[script.runs[cmd.args].items[0]].code
+            if code[-1:] == b'\xa1' and (len(code) == 2 and 0x40 <= code[0] < 0x80):
+                used.append(code[0] - 0x40)
+            elif code[:1] == b'\x82' and len(code) == 6:
+                used.append(struct.unpack_from('<i', code, 1)[0])
+    index = max(used, default=0) + 1
+    if not 0 < index < 0x7fffffff:
+        raise EditError(f'{option.script}: no index left for a new option')
+
+    def lit(value):
+        return esd.done(esd.lit(value))
+
+    # Add the entry just before the menu shows; a new branch after the first (which reads the
+    # choice) goes to a new state that turns the flag on and then leaves as a closed menu does.
+    entry = list(script.runs[state.entry].items)
+    show = next(k for k, c in enumerate(entry) if (script.cmds[c].bank, script.cmds[c].id) == SHOW_MENU)
+    entry.insert(show, script.cmd(*ADD_TO_LIST, [lit(index), lit(option.text), lit(-1)]))
+    picked = script.state(max(script.states[si].id for si in group.states) + 1)
+    group.states.append(picked)
+    script.states[picked].entry = script.run([script.cmd(*SET_FLAG, [lit(option.flag), lit(1)])])
+    script.states[picked].conds = script.run([script.cond(leave, esd.done(esd.lit(1)))])
+    branch = script.cond(picked, esd.done(b'\xaf' + esd.lit(index) + EQ))
+    state.entry = script.run(entry)
+    state.conds = script.run(conds[:1] + [branch] + conds[1:])
+    result = esd.serialize(script)
+    if esd.serialize(esd.parse(result)) != result:
+        raise EditError(f'{option.script}: the edited script doesn\'t read back the same')
+    return result
+
+
+def apply_talk(data, options):
+    """The talk archive `data` (BND4 bytes) with `options` added (bytes in, bytes out)."""
+    try:
+        archive = Bnd4(data)
+        for option in options:
+            try:
+                i = archive.index('\\' + option.script + '.esd')
+            except FormatError:
+                raise EditError(f'{option.script}: not a talk script in this file') from None
+            archive.files[i] = add_option(archive.files[i], option)
+        return archive.to_bytes()
+    except (esd.EsdError, FormatError) as error:
+        raise EditError(str(error)) from None
+
+
+# The kinds of edit file: its folder in edits/, its suffix, the game file's folder and suffix,
+# a check that the game file can be edited, the reader and the applier.
+KINDS = {
+    'event': (EVENT_SUFFIX, 'event', '.emevd.dcx', Emevd, parse, apply),
+    'talk': (TALK_SUFFIX, 'script/talk', '.talkesdbnd.dcx', Bnd4, parse_talk, apply_talk),
+}
+
+
 def _child(folder, name):
     """`name` in `folder`, matched case-insensitively, as mods.child does."""
     for entry in (folder.iterdir() if folder.is_dir() else ()):
@@ -240,28 +389,31 @@ def _child(folder, name):
 
 
 def edit_files(mod):
-    """(game path, edit file) of a mod's event edits: <mod>/edits/event/<name>.emevd.edit.toml."""
-    folder = _child(_child(Path(mod), EDITS_FOLDER), 'event')
-    if not folder.is_dir():
-        return []
+    """(kind, game path, edit file) of a mod's edits: <mod>/edits/event/<name>.emevd.edit.toml
+    and <mod>/edits/talk/<name>.talk.edit.toml."""
     found = []
-    for path in sorted(folder.iterdir(), key=lambda p: p.name.casefold()):
-        if path.is_file() and path.name.casefold().endswith(EVENT_SUFFIX):
-            stem = path.name[:-len(EVENT_SUFFIX)]
-            found.append((Path('dvdroot_ps4') / 'event' / f'{stem}.emevd.dcx', path))
+    for kind, (suffix, game_folder, game_suffix, *_rest) in KINDS.items():
+        folder = _child(_child(Path(mod), EDITS_FOLDER), kind)
+        if not folder.is_dir():
+            continue
+        for path in sorted(folder.iterdir(), key=lambda p: p.name.casefold()):
+            if path.is_file() and path.name.casefold().endswith(suffix):
+                stem = path.name[:-len(suffix)]
+                found.append((kind, Path('dvdroot_ps4') / game_folder / f'{stem}{game_suffix}', path))
     return found
 
 
 def build(base, mods, out, log=print):
-    """Apply the event edits of `mods` [(name, folder)], in order, to the files `base(game path)`
+    """Apply the edits of `mods` [(name, folder)], in order, to the files `base(game path)`
     gives (bytes, or None if there is none). Writes the results under `out`/dvdroot_ps4 and
     returns `out`, or None when no edit applied."""
     by_file = {}
     for name, folder in mods:
-        for relative, path in edit_files(folder):
-            by_file.setdefault(relative.as_posix().casefold(), (relative, []))[1].append((name, path))
+        for kind, relative, path in edit_files(folder):
+            by_file.setdefault(relative.as_posix().casefold(), (kind, relative, []))[2].append((name, path))
     written = 0
-    for relative, edits in by_file.values():
+    for kind, relative, edits in by_file.values():
+        _suffix, _folder, _game_suffix, check, read, edit = KINDS[kind]
         original = base(relative)
         if original is None:
             log(f'Script edits: {relative.as_posix()} is not in the game; '
@@ -269,8 +421,8 @@ def build(base, mods, out, log=print):
             continue
         try:
             data = dcx_decompress(original)
-            Emevd(data)
-        except (EmevdError, FormatError) as error:
+            check(data)
+        except (EmevdError, FormatError, esd.EsdError) as error:
             log(f'Script edits: {relative.as_posix()} can\'t be read ({error}); '
                 f'left out: {", ".join(name for name, _ in edits)}')
             continue
@@ -278,7 +430,7 @@ def build(base, mods, out, log=print):
         for name, path in edits:
             try:
                 # utf-8-sig: Windows editors and PowerShell 5.1 write a BOM (port-a2866f9-F2).
-                data = apply(data, parse(path.read_text(encoding='utf-8-sig')))
+                data = edit(data, read(path.read_text(encoding='utf-8-sig')))
             except (EditError, OSError, UnicodeDecodeError) as error:
                 log(f'Script edits: {name}: {path.name}: {error}; left out')
                 continue

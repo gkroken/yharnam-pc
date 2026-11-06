@@ -60,6 +60,14 @@ instructions = ["EndUnconditionally(Restart)"]
 '''
 
 
+TALK = '''
+[[option]]
+script = "t241335"
+text = 15000000
+flag = 12401902
+'''
+
+
 def ids(data):
     return [struct.unpack_from('<q', row)[0] for row in Emevd(data).events]
 
@@ -108,6 +116,24 @@ class ParseTests(unittest.TestCase):
             with self.subTest(text=text):
                 with self.assertRaises(se.EditError) as caught:
                     se.parse(text)
+                self.assertIn(why, str(caught.exception))
+
+
+class TalkParseTests(unittest.TestCase):
+    def test_options_and_mistakes(self):
+        self.assertEqual(se.parse_talk(TALK), [se.TalkOption('t241335', 15000000, 12401902, 1)])
+        cases = {
+            '[[option]]\nscript = "gilbert"\ntext = 1\nflag = 2': 'a talk script\'s name',
+            '[[option]]\nscript = "t1"\ntext = -1\nflag = 2': 'text must be a number from 0',
+            '[[option]]\nscript = "t1"\ntext = 1\nflag = 0': 'flag must be a number from 1',
+            '[[option]]\nscript = "t1"\ntext = 1\nflag = 2\nmenu = 3': 'menu is 1 or 2',
+            '[[option]]\nscript = "t1"\ntext = 1\nflag = 2\nrun = "x"': 'unknown keys',
+            '[[event]]\nid = 1': 'unknown keys',
+        }
+        for text, why in cases.items():
+            with self.subTest(text=text):
+                with self.assertRaises(se.EditError) as caught:
+                    se.parse_talk(text)
                 self.assertIn(why, str(caught.exception))
 
 
@@ -187,7 +213,13 @@ class BuildTests(unittest.TestCase):
         name, folder = self.mod('A', EDIT_A)
         (folder / 'edits/event/notes.txt').write_text('not an edit')
         (folder / 'edits/event/M24_01_00_00.EMEVD.EDIT.TOML.bak').write_text(EDIT_B)
-        self.assertEqual([p.name for _r, p in se.edit_files(folder)], ['m24_01_00_00.emevd.edit.toml'])
+        (folder / 'edits/talk').mkdir()
+        (folder / 'edits/talk/m24_01_00_00.talk.edit.toml').write_text(TALK)
+        (folder / 'edits/talk/m24_01_00_00.emevd.edit.toml').write_text(EDIT_B)  # wrong folder
+        self.assertEqual([(k, r.as_posix(), p.name) for k, r, p in se.edit_files(folder)], [
+            ('event', 'dvdroot_ps4/event/m24_01_00_00.emevd.dcx', 'm24_01_00_00.emevd.edit.toml'),
+            ('talk', 'dvdroot_ps4/script/talk/m24_01_00_00.talkesdbnd.dcx', 'm24_01_00_00.talk.edit.toml'),
+        ])
 
 
 class ModsMergeTests(unittest.TestCase):
@@ -259,13 +291,11 @@ class ModsMergeTests(unittest.TestCase):
         for name in ('Boom', 'Good'):
             (root / name / 'edits/event').mkdir(parents=True)
             (root / name / 'edits/event/m24_01_00_00.emevd.edit.toml').write_text(EDIT_B if name == 'Good' else 'x')
-        real = se.parse
-        se.parse = lambda text: (_ for _ in ()).throw(RecursionError('deep')) if text == 'x' else real(text)
-        try:
+        kind = se.KINDS['event']
+        reader = lambda text: (_ for _ in ()).throw(RecursionError('deep')) if text == 'x' else se.parse(text)  # noqa: E731
+        with unittest.mock.patch.dict(se.KINDS, {'event': kind[:4] + (reader,) + kind[5:]}):
             se.build(lambda rel: original, [('Boom', root / 'Boom'), ('Good', root / 'Good')],
                      root / 'out', log=lines.append)
-        finally:
-            se.parse = real
         self.assertIn('Script edits: Boom: m24_01_00_00.emevd.edit.toml: could not be applied '
                       '(RecursionError: deep); left out. Please report this.', lines)
         self.assertIn('Script edits: dvdroot_ps4/event/m24_01_00_00.emevd.dcx: Good', lines)
@@ -289,10 +319,102 @@ class ModsMergeTests(unittest.TestCase):
     def test_the_folder_names_agree_with_mods_py(self):
         sys.path.insert(0, str(ROOT / 'scripts'))
         import mods
-        self.assertEqual((mods.EDITS_FOLDER, mods.EVENT_EDIT_SUFFIX), (se.EDITS_FOLDER, se.EVENT_SUFFIX))
+        self.assertEqual((mods.EDITS_FOLDER, mods.EVENT_EDIT_SUFFIX, mods.TALK_EDIT_SUFFIX),
+                         (se.EDITS_FOLDER, se.EVENT_SUFFIX, se.TALK_SUFFIX))
+        talk_only = self.root / 'mods/TalkOnly/edits/talk'
+        talk_only.mkdir(parents=True)
+        (talk_only / 'm24_01_00_00.talk.edit.toml').write_text(TALK)
+        self.assertTrue(mods.is_mod(talk_only.parent.parent))
 
 
 GAME = Path(os.environ['BB_TEST_GAME_DIR']) if os.environ.get('BB_TEST_GAME_DIR') else None
+
+
+@unittest.skipUnless(GAME, 'BB_TEST_GAME_DIR not set')
+class GameTalkTests(unittest.TestCase):
+    """Talk options on the game's own talk scripts (t241335: Central Yharnam, its menu's entries
+    1-4 and Leave, 50)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.talk = GAME / 'dvdroot_ps4/script/talk'
+        cls.cy = dcx_decompress((cls.talk / 'm24_01_00_00.talkesdbnd.dcx').read_bytes())
+
+    def menu(self, data, name='t241335'):
+        archive = se.Bnd4(data)
+        script = se.esd.parse(archive.files[archive.index('\\' + name + '.esd')])
+        state = next(st for st in script.states if st.entry >= 0 and se.SHOW_MENU in
+                     [(script.cmds[c].bank, script.cmds[c].id) for c in script.runs[st.entry].items])
+        entry = [(script.cmds[c].bank, script.cmds[c].id,
+                  [script.exprs[i].code for i in script.runs[script.cmds[c].args].items])
+                 for c in script.runs[state.entry].items]
+        conds = [script.conds[c] for c in script.runs[state.conds].items]
+        return script, entry, conds
+
+    def test_two_options_go_into_gilberts_menu_and_leave_as_leave_does(self):
+        out = se.apply_talk(self.cy, se.parse_talk(TALK) + [se.TalkOption('t241335', 15000005, 12401903)])
+        script, entry, conds = self.menu(out)
+        lit = lambda v: se.esd.done(se.esd.lit(v))  # noqa: E731
+        self.assertEqual(entry[-3:], [(1, 19, [lit(51), lit(15000000), lit(-1)]),
+                                      (1, 19, [lit(52), lit(15000005), lit(-1)]),
+                                      (1, 10, [lit(0), lit(0), lit(0)])])
+        _s, _e, before = self.menu(self.cy)
+        leave = before[-1].target  # the closed-or-Leave branch
+        # The first still reads the choice; the new branches follow it, newest first.
+        self.assertTrue(script.exprs[conds[0].eval].code.startswith(se.READ_CHOICE))
+        for cond, flag, index in ((conds[1], 12401903, 52), (conds[2], 12401902, 51)):
+            self.assertEqual(script.exprs[cond.eval].code, se.esd.done(b'\xaf' + se.esd.lit(index) + se.EQ))
+            picked = script.states[cond.target]
+            (cmd,) = [script.cmds[c] for c in script.runs[picked.entry].items]
+            self.assertEqual((cmd.bank, cmd.id, [script.exprs[i].code for i in script.runs[cmd.args].items]),
+                             (1, 11, [lit(flag), lit(1)]))
+            (out_cond,) = [script.conds[c] for c in script.runs[picked.conds].items]
+            self.assertEqual(script.states[out_cond.target].id, _s.states[leave].id)
+        # Every other talk script in the file is unchanged.
+        a, b = se.Bnd4(self.cy), se.Bnd4(out)
+        changed = [n for n, x, y in zip(a.names, a.files, b.files) if x != y]
+        self.assertEqual([n.replace(chr(92), '/').rsplit('/', 1)[-1] for n in changed], ['t241335.esd'])
+
+    def test_every_usual_menu_of_the_game_takes_an_option(self):
+        took, refused = 0, []
+        for path in sorted(self.talk.glob('*.talkesdbnd.dcx')):
+            archive = se.Bnd4(dcx_decompress(path.read_bytes()))
+            for name, data in zip(archive.names, archive.files):
+                script = se.esd.parse(data)
+                count = sum(1 for st in script.states if st.entry >= 0 and se.SHOW_MENU in
+                            [(script.cmds[c].bank, script.cmds[c].id) for c in script.runs[st.entry].items])
+                for menu in range(1, count + 1):
+                    short = name.replace(chr(92), '/').rsplit('/', 1)[-1][:-4]
+                    try:
+                        se.add_option(data, se.TalkOption(short, 15000000, 12401902, menu))
+                        took += 1
+                    except se.EditError as error:
+                        refused.append((short, menu, str(error)))
+        # 53 menus; the two of another shape (t100000, t290000: the choice isn't read first) refused.
+        self.assertEqual(took, 51, refused)
+        self.assertEqual(sorted(r[0] for r in refused), ['t100000', 't290000'])
+
+    def test_refusals(self):
+        # A menu with two branches for a closed menu (Gilbert's with its last one twice): which
+        # one an added option should leave by is unknown, so it's refused.
+        archive = se.Bnd4(self.cy)
+        data = archive.files[archive.index('\\t241335.esd')]
+        script, _entry, conds = self.menu(self.cy)
+        state = next(st for st in script.states if st.entry >= 0 and se.SHOW_MENU in
+                     [(script.cmds[c].bank, script.cmds[c].id) for c in script.runs[st.entry].items])
+        items = list(script.runs[state.conds].items)
+        state.conds = script.run(items + [script.cond(conds[-1].target, script.exprs[conds[-1].eval].code)])
+        twice = se.esd.serialize(script)
+        self.assertNotEqual(twice, data)
+        with self.assertRaises(se.EditError) as caught:
+            se.add_option(twice, se.TalkOption('t241335', 1, 2))
+        self.assertIn('2 branches for a closed menu', str(caught.exception))
+        with self.assertRaises(se.EditError) as caught:
+            se.apply_talk(self.cy, [se.TalkOption('t999999', 1, 2)])
+        self.assertIn('not a talk script in this file', str(caught.exception))
+        with self.assertRaises(se.EditError) as caught:
+            se.apply_talk(self.cy, [se.TalkOption('t241335', 1, 2, menu=2)])
+        self.assertIn('has 1 menu(s), not 2', str(caught.exception))
 
 
 @unittest.skipUnless(GAME, 'BB_TEST_GAME_DIR not set')

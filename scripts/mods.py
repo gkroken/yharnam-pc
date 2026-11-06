@@ -39,6 +39,7 @@ ARCHIVE_SUFFIXES = {'.zip', '.7z', '.rar'}
 SCRIPTS_FOLDER = 'scripts'
 EDITS_FOLDER = 'edits'  # script_edits.EDITS_FOLDER; not imported, so the launchers' Pythons
 EVENT_EDIT_SUFFIX = '.emevd.edit.toml'  # without tomllib can still list mods
+TALK_EDIT_SUFFIX = '.talk.edit.toml'
 
 
 def has_scripts(folder):
@@ -52,10 +53,14 @@ def has_scripts(folder):
 
 
 def has_edits(folder):
-    """Whether `folder` has event edits: <mod>/edits/event/*.emevd.edit.toml."""
-    events = child(child(folder, EDITS_FOLDER), 'event')
-    return events.is_dir() and any(e.is_file() and e.name.casefold().endswith(EVENT_EDIT_SUFFIX)
-                                   for e in events.iterdir())
+    """Whether `folder` has edits: <mod>/edits/event/*.emevd.edit.toml or
+    <mod>/edits/talk/*.talk.edit.toml."""
+    edits = child(folder, EDITS_FOLDER)
+    for kind, suffix in (('event', EVENT_EDIT_SUFFIX), ('talk', TALK_EDIT_SUFFIX)):
+        found = child(edits, kind)
+        if found.is_dir() and any(e.is_file() and e.name.casefold().endswith(suffix) for e in found.iterdir()):
+            return True
+    return False
 
 
 def own_folders(folder):
