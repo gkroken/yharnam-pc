@@ -21,8 +21,8 @@ EMEDF = '''{
   "main_classes": [
     {"index": 3, "instrs": [{"name": "IF Event Flag", "index": 0, "args": [
       {"type": 3, "enum_name": "Condition Group"}, {"type": 0, "enum_name": "ON/OFF/CHANGE"},
-      {"type": 0, "enum_name": "Target Event Flag Type"}, {"type": 5}]}]},
-    {"index": 1001, "instrs": [{"name": "WAIT Fixed Time (Seconds)", "index": 0, "args": [{"type": 6}]}]},
+      {"type": 0, "enum_name": "Target Event Flag Type", "default": 0}, {"type": 5}]}]},
+    {"index": 1001, "instrs": [{"name": "WAIT Fixed Time (Seconds)", "index": 0, "args": [{"type": 6, "default": 0.0}]}]},
     {"index": 2003, "instrs": [{"name": "Set Event Flag", "index": 2, "args": [
       {"type": 5}, {"type": 0, "enum_name": "ON/OFF"}]},
       {"name": "Twice", "index": 90, "args": []}, {"name": "Twice", "index": 91, "args": []}]}
@@ -109,6 +109,18 @@ class ConvertTests(unittest.TestCase):
         # Started only by InitializeEvent(0, id, 0): another slot or arguments isn't "run".
         self.assertIn('run = false', sc.convert(SCRIPT.replace('function(X0_4)', 'function()')
                                                 .replace('X0_4', '1'), self.table, [12415992]))
+
+    def test_trailing_arguments_left_out_take_the_tables_defaults(self):
+        # port-3b6ed37-N1: as DarkScript3 lets them; one without a default must be written.
+        text = sc.convert('$Event(5, Default, function() { WaitFixedTimeSeconds(); });', self.table, [5])
+        self.assertIn('args = ["f32:0.0"] },  # WaitFixedTimeSeconds(); defaults filled in: 0.0', text)
+        self.assertEqual(se.parse(text)[0].instructions, [se.raw({'bank': 1001, 'id': 0, 'args': ['f32:0']})])
+        for statement, why in (('SetEventFlag(5);', 'takes 2 arguments, not 1'),
+                               ('IfEventFlag(MAIN, ON);', 'takes 4 arguments, not 2')):
+            with self.subTest(statement=statement):
+                with self.assertRaises(sc.ConvertError) as caught:
+                    sc.convert(f'$Event(5, Default, function() {{ {statement} }});', self.table, [5])
+                self.assertIn(why, str(caught.exception))
 
     def test_the_command_line_writes_the_edit_file_or_a_reason(self):
         with tempfile.TemporaryDirectory() as temp:

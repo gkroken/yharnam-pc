@@ -36,8 +36,8 @@ def _key(name):
 
 
 def load_emedf(text):
-    """{key: (bank, id, name, [(type, {value key: number} or None)])} from an EMEDF JSON (which may
-    have // comment lines)."""
+    """{key: (bank, id, name, [(type, {value key: number} or None, default or None)])} from an
+    EMEDF JSON (which may have // comment lines)."""
     lines = [line for line in text.splitlines() if not line.lstrip().startswith('//')]
     data = json.loads('\n'.join(lines))
     enums = {e['name']: {_key(v): int(k) for k, v in e['values'].items()} for e in data.get('enums', [])}
@@ -48,7 +48,7 @@ def load_emedf(text):
             for arg in instr['args']:
                 if arg['type'] not in TYPES:
                     raise ConvertError(f'{instr["name"]}: argument type {arg["type"]} is not known')
-                args.append((TYPES[arg['type']], enums.get(arg.get('enum_name'))))
+                args.append((TYPES[arg['type']], enums.get(arg.get('enum_name')), arg.get('default')))
             key = _key(instr['name'])
             if key in table:
                 twice.add(key)
@@ -109,10 +109,17 @@ def instruction(statement, table):
         raise ConvertError(f'{name}: not an instruction of this EMEDF (or two have that name)')
     bank, code, full, layout = found
     parts = [p.strip() for p in inner.split(',')] if inner.strip() else []
+    # Trailing arguments left out take the table's defaults, as DarkScript3 lets them
+    # (port-3b6ed37-N1); one without a default must be written.
+    filled = []
+    if len(parts) < len(layout) and all(d is not None for _k, _e, d in layout[len(parts):]):
+        filled = [str(d) for _k, _e, d in layout[len(parts):]]
+    parts_given = parts
+    parts = parts + filled
     if len(parts) != len(layout):
-        raise ConvertError(f'{name} ({full}) takes {len(layout)} arguments, not {len(parts)}')
+        raise ConvertError(f'{name} ({full}) takes {len(layout)} arguments, not {len(parts_given)}')
     args = []
-    for part, (kind, enum) in zip(parts, layout):
+    for part, (kind, enum, _default) in zip(parts, layout):
         value = _number(part)
         if value is None and enum is not None:
             value = enum.get(_key(part.rsplit('.', 1)[-1]))
@@ -121,7 +128,10 @@ def instruction(statement, table):
         if kind != 'f32' and isinstance(value, float):
             raise ConvertError(f'{name}: {part!r} is not a whole number')
         args.append(f'{kind}:{value}')
-    return {'bank': bank, 'id': code, 'args': args}, f'{name}({", ".join(parts)})'
+    comment = f'{name}({", ".join(parts_given)})'
+    if filled:
+        comment += f'; defaults filled in: {", ".join(filled)}'
+    return {'bank': bank, 'id': code, 'args': args}, comment
 
 
 def _toml_instruction(raw):
