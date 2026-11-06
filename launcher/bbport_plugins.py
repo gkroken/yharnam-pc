@@ -254,10 +254,16 @@ class PluginsIni:
 
     def __init__(self, path):
         self.path = Path(path)
+        self.error = ''  # why the file couldn't be read, when it exists but can't be
         try:
             raw = self.path.read_bytes()
         except FileNotFoundError:
             raw = b''
+        except OSError as error:
+            # Locked, denied, a folder of that name: the host can't read it either, and plays with
+            # every switch at its default. Read as empty, and say so (port-1a05644-F1).
+            raw = b''
+            self.error = f"plugins.ini can't be read ({error.strerror or error})"
         self.bom = raw.startswith(b'\xef\xbb\xbf')
         text = raw[3:].decode('utf-8', 'replace') if self.bom else raw.decode('utf-8', 'replace')
         self.newline = '\r\n' if '\r\n' in text else '\n'
@@ -346,7 +352,10 @@ class PluginsIni:
         return ''.join(self.lines)
 
     def save(self):
-        """Written whole to a temporary file first, then put in place, so the game never reads half."""
+        """Written whole to a temporary file first, then put in place, so the game never reads half.
+        A file that couldn't be read is never written over: its contents would be lost."""
+        if self.error:
+            raise OSError(self.error)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         data = (b'\xef\xbb\xbf' if self.bom else b'') + self.text().encode('utf-8')
         handle, temporary = tempfile.mkstemp(prefix='plugins.ini.', dir=self.path.parent)
@@ -440,7 +449,8 @@ def page_rows(data_dir, user_dir, mods=(), online=False, all_off=False, log_text
 
     mods: (name, folder, enabled) as for lua_scripts(). log_text: the last run's log, or None."""
     run = last_run(log_text) if log_text else {'plugins': {}, 'scripts': {}}
-    plugins = scan(data_dir, user_dir, online=online, all_off=all_off)
+    ini = PluginsIni(Path(user_dir) / 'plugins.ini')
+    plugins = scan(data_dir, user_dir, ini=ini, online=online, all_off=all_off)
     rows = []
     for p in plugins:
         if p.loads:
@@ -480,4 +490,6 @@ def page_rows(data_dir, user_dir, mods=(), online=False, all_off=False, log_text
         lua_note = f'No script runs: the Lua plugin is left out ({lua.why}).'
     else:
         lua_note = ''
-    return {'plugins': rows, 'scripts': scripts, 'luaNote': lua_note}
+    # The host can't read it either: every switch is at its default (on, or off for an opt-in plugin).
+    problem = f"{ini.error}, so every plugin's switch is at its default." if ini.error else ''
+    return {'plugins': rows, 'scripts': scripts, 'luaNote': lua_note, 'problem': problem}

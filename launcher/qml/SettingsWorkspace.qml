@@ -398,6 +398,7 @@ Item {
                     }
                     // Plugins (DLLs) and Lua scripts: read from their files by bbport_plugins, never run here.
                     Note { visible: is("Mods & Patches", "Plugins and scripts"); text: "Plugins and Lua scripts run code while the game plays. A change applies the next time the game starts. Online play leaves out every plugin marked as changing the game." }
+                    Note { visible: is("Mods & Patches", "Plugins and scripts") && launcher.pluginProblem !== ""; text: launcher.pluginProblem; color: Theme.warn }
                     Repeater {
                         model: is("Mods & Patches", "Plugins and scripts") ? launcher.pluginRows : []
                         delegate: Item {

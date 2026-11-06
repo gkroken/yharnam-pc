@@ -290,7 +290,7 @@ class LauncherBackend(QObject):
         self._notice = 'Ready to hunt.'
         self._mods = []
         self._patches = []
-        self._plugin_page = {'plugins': [], 'scripts': [], 'luaNote': ''}
+        self._plugin_page = {'plugins': [], 'scripts': [], 'luaNote': '', 'problem': ''}
         # A newer release found earlier (a direct launch checks quietly): shown at once.
         self._update = core.remembered_update() if self.app.get('check_updates') else None
         self._settings_revision = 0
@@ -1096,27 +1096,27 @@ class LauncherBackend(QObject):
     def _user_dir(self):
         return Path(self.app.get('user_dir') or core.DATA_DIR / 'user')
 
-    def _game_env(self, key):
-        """A variable as the game will get it: the launcher's environment, then Extra environment variables."""
-        value = os.environ.get(key, '')
-        for item in str(self.app.get('extra_env') or '').split():
-            if item.startswith(key + '='):
-                value = item.split('=', 1)[1]
-        return value
-
     def _refresh_plugins(self):
-        """The Mods page's plugins and Lua scripts (bbport_plugins: read from the files, never run)."""
+        """The Mods page's plugins and Lua scripts (bbport_plugins: read from the files, never run).
+        Nothing here may stop the launcher from opening: any failure becomes a line on the page."""
         import bbport_plugins
-        user = self._user_dir()
         try:
-            log = (user / 'last_run.log').read_text(encoding='utf-8', errors='replace')
-        except OSError:
-            log = None
-        # Online play leaves out the plugins that change the game: the launcher's own rule for BB_ONLINE.
-        online = bool(self.app.get('online')) and core.play_mode(self.app) == 'huntersdream' and not core.thd_refused()
-        mods = [(m['name'], self._mods_dir() / m['name'], m['enabled']) for m in self._mods]
-        self._plugin_page = bbport_plugins.page_rows(core.DATA_DIR, user, mods, online=online,
-                                                     all_off=self._game_env('BB_PLUGINS') == '0', log_text=log)
+            user = self._user_dir()
+            try:
+                log = (user / 'last_run.log').read_text(encoding='utf-8', errors='replace')
+            except OSError:
+                log = None
+            # What a normal launch passes the game (settings, then Extra environment variables), read
+            # by the host's rules: online play without seamless co-op leaves out the plugins that change
+            # the game; BB_PLUGINS=0 loads none. (Play co-op sets BB_COOP=1, which keeps them.)
+            env = core.game_environment(self.app)
+            online = env.get('BB_ONLINE') == '1' and env.get('BB_COOP') != '1'
+            mods = [(m['name'], self._mods_dir() / m['name'], m['enabled']) for m in self._mods]
+            self._plugin_page = bbport_plugins.page_rows(core.DATA_DIR, user, mods, online=online,
+                                                         all_off=env.get('BB_PLUGINS') == '0', log_text=log)
+        except Exception as error:  # noqa: BLE001 - the page must never take the launcher down
+            self._plugin_page = {'plugins': [], 'scripts': [], 'luaNote': '',
+                                 'problem': f"The plugins and scripts couldn't be listed: {error}"}
 
     @Property('QVariantList', notify=changed)
     def pluginRows(self):
@@ -1130,13 +1130,17 @@ class LauncherBackend(QObject):
     def luaNote(self):
         return self._plugin_page['luaNote']
 
+    @Property(str, notify=changed)
+    def pluginProblem(self):
+        return self._plugin_page['problem']
+
     @Slot(str, bool)
     def setPlugin(self, name, enabled):
         """[plugins] <name> = 1 or 0 in plugins.ini beside the saves: the line the game reads, nothing else."""
         import bbport_plugins
-        ini = bbport_plugins.PluginsIni(self._user_dir() / 'plugins.ini')
-        ini.set_switch(name, enabled)
         try:
+            ini = bbport_plugins.PluginsIni(self._user_dir() / 'plugins.ini')
+            ini.set_switch(name, enabled)
             ini.save()
         except OSError as error:
             self._set_notice(f"Couldn't save plugins.ini: {error}")

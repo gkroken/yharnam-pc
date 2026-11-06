@@ -299,6 +299,19 @@ class IniTests(Folder):
         ini.set_switch('b', True)
         self.assertEqual(ini.text(), '[plugins]\nb = 1\n')
 
+    def test_an_unreadable_file_reads_as_empty_and_is_never_written_over(self):
+        """port-1a05644-F1: a plugins.ini that exists but can't be read (here a folder of that name)."""
+        (self.root / 'plugins.ini').mkdir()
+        (self.root / 'plugins.ini' / 'keep.txt').write_text('mine')
+        ini = bp.PluginsIni(self.root / 'plugins.ini')
+        self.assertTrue(ini.error.startswith("plugins.ini can't be read ("), ini.error)
+        self.assertEqual((ini.switch('a'), ini.text()), (-1, ''))
+        ini.set_switch('a', False)
+        with self.assertRaises(OSError):
+            ini.save()
+        self.assertEqual((self.root / 'plugins.ini' / 'keep.txt').read_text(), 'mine')
+        self.assertEqual(bp.PluginsIni(self.root / 'missing.ini').error, '')  # not there: no problem
+
     def test_save_keeps_the_bom_and_leaves_no_temporary_file(self):
         ini = self.ini('[plugins]\na = 1\n', bom=True)
         ini.set_switch('a', False)
@@ -428,6 +441,16 @@ class PageRowsTests(Folder):
         (self.data / 'plugins' / 'bb_lua.dll').unlink()
         page, _ = self.rows()
         self.assertEqual(page['luaNote'], 'Lua scripts need bb_lua.dll in a plugins folder.')
+
+    def test_an_unreadable_plugins_ini_is_a_line_on_the_page(self):
+        page, rows = self.rows()
+        self.assertEqual(page['problem'], '')
+        (self.user / 'plugins.ini').mkdir()
+        page, rows = self.rows()
+        self.assertTrue(page['problem'].startswith("plugins.ini can't be read ("), page['problem'])
+        self.assertTrue(page['problem'].endswith("so every plugin's switch is at its default."))
+        self.assertTrue(rows['boss.dll']['loads'])        # as the host: defaults
+        self.assertFalse(rows['later.dll']['loads'])      # an opt-in one stays off
 
 
 if __name__ == '__main__':
