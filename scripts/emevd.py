@@ -113,6 +113,16 @@ class Emevd:
         # but is rejected by the game's documented instruction layout.
         init_args = struct.pack('<iii', slot, event_id, 0)
         self.insert_instructions(0, _q(self.events[0], 8), [(2000, 0, init_args)])
+        self.append_event(event_id, instructions)
+
+    def append_event(self, event_id: int, instructions: list[tuple[int, int, bytes]]):
+        """Append an event without parameters that nothing starts (another event or edit may)."""
+        if any(_q(e, 0) == event_id for e in self.events) or not instructions or event_id <= 0:
+            raise EmevdError('new event id already exists, or it is invalid or has no instructions')
+        for bank, code, args in instructions:
+            if (not 0 <= bank <= 0x7fffffff or not 0 <= code <= 0x7fffffff
+                    or not isinstance(args, bytes) or len(args) % 4):
+                raise EmevdError('invalid EMEVD instruction')
         first = len(self.instructions) * INSTRUCTION
         new_rows = [self._new_instruction(bank, instruction_id, args)
                     for bank, instruction_id, args in instructions]

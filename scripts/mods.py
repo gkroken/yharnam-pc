@@ -33,9 +33,12 @@ EXTRA_SUFFIXES = {'', '.txt', '.md', '.ini', '.json', '.pdf', '.rtf', '.nfo', '.
                   '.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'}
 ARCHIVE_SUFFIXES = {'.zip', '.7z', '.rar'}
 # What a mod may carry at its top besides game files: Lua scripts (scripts/*.lua), which the
-# plugins branch's bb_lua loads from there. They are never linked into the game, and a mod of
+# plugins branch's bb_lua loads from there, and event edits (edits/event/*.emevd.edit.toml),
+# which scripts/script_edits.py applies. They are never linked into the game, and a mod of
 # only these is still a mod, so the launcher lists it, turns it off and orders it.
 SCRIPTS_FOLDER = 'scripts'
+EDITS_FOLDER = 'edits'  # script_edits.EDITS_FOLDER; not imported, so the launchers' Pythons
+EVENT_EDIT_SUFFIX = '.emevd.edit.toml'  # without tomllib can still list mods
 
 
 def has_scripts(folder):
@@ -48,9 +51,22 @@ def has_scripts(folder):
                                     for e in scripts.iterdir())
 
 
+def has_edits(folder):
+    """Whether `folder` has event edits: <mod>/edits/event/*.emevd.edit.toml."""
+    events = child(child(folder, EDITS_FOLDER), 'event')
+    return events.is_dir() and any(e.is_file() and e.name.casefold().endswith(EVENT_EDIT_SUFFIX)
+                                   for e in events.iterdir())
+
+
+def own_folders(folder):
+    """The top folders of a mod that are its scripts or edits, not game files (case-folded)."""
+    return ({SCRIPTS_FOLDER} if has_scripts(folder) else set()) | \
+        ({EDITS_FOLDER} if has_edits(folder) else set())
+
+
 def is_mod(folder):
-    """A mod: game files in an accepted layout (content_root), or scripts only."""
-    return Path(folder).is_dir() and bool(content_root(folder) or has_scripts(folder))
+    """A mod: game files in an accepted layout (content_root), or scripts or edits only."""
+    return Path(folder).is_dir() and bool(content_root(folder) or own_folders(folder))
 
 
 def content_root(folder, depth=0):
@@ -71,11 +87,11 @@ def content_root(folder, depth=0):
         if dvdroot.is_dir():
             return base, ''
     entries = [e for e in folder.iterdir() if not e.name.startswith('.')]
-    # The mod's own scripts folder (Lua files in it) isn't a wrapper around its files:
-    # <mod>/<mod v1>/dvdroot_ps4 beside <mod>/scripts/*.lua. A "scripts" folder without them may
-    # be one: <mod>/scripts/dvdroot_ps4 (port-fdab644-F1).
-    own_scripts = not depth and has_scripts(folder)
-    folders = [e for e in entries if e.is_dir() and not (own_scripts and e.name.casefold() == SCRIPTS_FOLDER)]
+    # The mod's own scripts or edits folder (with scripts or edits in it) isn't a wrapper around
+    # its files: <mod>/<mod v1>/dvdroot_ps4 beside <mod>/scripts/*.lua. A "scripts" folder
+    # without them may be one: <mod>/scripts/dvdroot_ps4 (port-fdab644-F1).
+    own = own_folders(folder) if not depth else set()
+    folders = [e for e in entries if e.is_dir() and e.name.casefold() not in own]
     if any(e.name.casefold() in GAME_FOLDERS for e in folders):
         return folder, 'dvdroot_ps4'
     if depth < 3 and len(folders) == 1 and not [e for e in entries if e.is_file() and
@@ -144,8 +160,8 @@ def selected(root, config):
 def mod_files(folder):
     """(game path, source) of every file a mod replaces or adds under dvdroot_ps4."""
     layout = content_root(folder)
-    if not layout and has_scripts(folder):
-        return  # scripts only: nothing to link
+    if not layout and own_folders(folder):
+        return  # scripts or edits only: nothing to link
     if not layout:
         raise ValueError(f'{folder}: expected dvdroot_ps4 (or chr/, parts/, ...) inside the mod folder')
     root, prefix = layout
@@ -559,7 +575,45 @@ def main():
         layers = keep_pc_menu_text(layers, generated, args.out)
     except (OSError, ValueError) as error:
         print(f'Mods: PC menu strings not merged ({error})', file=sys.stderr)
+    shutil.rmtree(args.out / 'script_edits', ignore_errors=True)  # an earlier start's
+    if args.enabled == '1':
+        layers += script_edits_layer(args.game, layers, generated, args.out / 'script_edits')
     print(build_overlay(args.game, args.out, layers))
+
+
+def resolved(game, layers):
+    """A function: game path (dvdroot_ps4/...) -> its bytes as the overlay of `layers` would give
+    them (the last layer that has the file, else the game's), or None if there is no such file."""
+    owners = {}
+    for _name, root in layers:
+        for relative, source in mod_files(root):
+            owners[relative.as_posix().casefold()] = source
+
+    def read(relative):
+        source = owners.get(Path(relative).as_posix().casefold())
+        if source is None:
+            source = Path(game)
+            for part in Path(relative).parts:
+                source = child(source, part)
+        return source.read_bytes() if source.is_file() else None
+    return read
+
+
+def script_edits_layer(game, layers, generated, out):
+    """[(name, folder)]: the layer of the mods' event edits (scripts/script_edits.py), applied in
+    mod order on top of what `layers` give, or [] if no edit applied. Never stops the start."""
+    edited = [(name, root) for name, root in layers if name not in generated and has_edits(root)]
+    if not edited:
+        return []
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import script_edits
+        layer = script_edits.build(resolved(game, layers), edited, out,
+                                   log=lambda line: print(line, file=sys.stderr))
+    except (ImportError, OSError, ValueError) as error:  # ImportError: a Python without tomllib
+        print(f'Script edits: none applied ({error})', file=sys.stderr)
+        return []
+    return [('script_edits', layer)] if layer else []
 
 
 if __name__ == '__main__':

@@ -11,15 +11,20 @@ from pathlib import Path
 import sys
 import unittest
 
-MODULES = ['test_launcher_plugins', 'test_paramdefs', 'test_probe']
+MODULES = ['test_launcher_plugins', 'test_paramdefs', 'test_probe', 'test_mods', 'test_script_edits']
 # Full id -> why it isn't run here.
 DESELECT = {
     'test_probe.LoaderTests.test_illegal_instruction_reports_guest_offset':
         'expects a POSIX signal code; known Windows failure (port-b4ae1ae-N2)',
 }
-# Class id prefix -> why its tests may skip here.
+# Test id or class id prefix -> why it may skip here.
 EXPECTED_SKIPS = {
     'test_paramdefs.GameTests.': 'reads the game files: no BB_TEST_GAME_DIR in CI',
+    'test_mods.PcMenuTextTests.': 'reads the game files: no BB_TEST_GAME_DIR in CI',
+    'test_script_edits.GameFileTests.': 'reads the game files: no BB_TEST_GAME_DIR in CI',
+    # Skips itself where a symlink can't be made (Windows without Developer Mode or admin).
+    'test_mods.ModTests.test_shadps4_sibling_folder_of_symlinks_is_left_out':
+        'needs the symlink privilege',
 }
 
 
