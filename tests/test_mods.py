@@ -316,10 +316,21 @@ class ModTests(unittest.TestCase):
         (self.moddir / 'NoLua/scripts/notes.txt').write_text('not a script')
         (self.moddir / 'Deeper/lua').mkdir(parents=True)
         (self.moddir / 'Deeper/lua/main.lua').write_text('bb.log("where bb_lua never looks")')
-        self.assertEqual(mods.discover(self.moddir), ['Both', 'Lua'])
+        # A folder named scripts with no Lua in it can still wrap a mod (port-fdab644-F1).
+        (self.moddir / 'Wrap/scripts/dvdroot_ps4/chr').mkdir(parents=True)
+        (self.moddir / 'Wrap/scripts/dvdroot_ps4/chr/a.dcx').write_bytes(b'wrap')
+        # bb_lua skips dot-folders (port-fdab644-N1); scripts one level too deep (N2).
+        (self.moddir / '.Hidden/scripts').mkdir(parents=True)
+        (self.moddir / '.Hidden/scripts/main.lua').write_text('bb.log("never loaded")')
+        (self.moddir / 'Nested/scripts/sub').mkdir(parents=True)
+        (self.moddir / 'Nested/scripts/sub/main.lua').write_text('bb.log("too deep")')
+        self.assertEqual(mods.discover(self.moddir), ['Both', 'Lua', 'Wrap'])
         found = dict(mods.unrecognized(self.moddir))
-        self.assertEqual(sorted(found), ['Deeper', 'NoLua'])
+        self.assertEqual(sorted(found), ['Deeper', 'Nested', 'NoLua'])
         self.assertIn('Deeper/scripts/', found['Deeper'])
+        self.assertIn('directly in Nested/scripts/, not in a subfolder', found['Nested'])
+        wrapped = mods.build_overlay(self.game, self.root / 'out3', [('Wrap', self.moddir / 'Wrap')])
+        self.assertEqual((wrapped / 'dvdroot_ps4/chr/a.dcx').read_bytes(), b'wrap')
         self.assertEqual(list(mods.mod_files(self.moddir / 'Lua')), [])
         result = mods.build_overlay(self.game, self.root / 'out',
                                     [('Lua', self.moddir / 'Lua'), ('Both', self.moddir / 'Both')])

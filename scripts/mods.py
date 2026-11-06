@@ -39,7 +39,10 @@ SCRIPTS_FOLDER = 'scripts'
 
 
 def has_scripts(folder):
-    """Whether `folder` has Lua scripts where bb_lua loads a mod's: <mod>/scripts/*.lua."""
+    """Whether `folder` has Lua scripts where bb_lua loads a mod's: <mod>/scripts/*.lua. bb_lua
+    skips mod folders whose name starts with '.', so their scripts don't count (port-fdab644-N1)."""
+    if Path(folder).name.startswith('.'):
+        return False
     scripts = child(folder, SCRIPTS_FOLDER)
     return scripts.is_dir() and any(e.is_file() and e.suffix.casefold() == '.lua'
                                     for e in scripts.iterdir())
@@ -68,9 +71,11 @@ def content_root(folder, depth=0):
         if dvdroot.is_dir():
             return base, ''
     entries = [e for e in folder.iterdir() if not e.name.startswith('.')]
-    # The mod's own scripts folder isn't a wrapper around its files (<mod>/<mod v1>/dvdroot_ps4
-    # beside <mod>/scripts).
-    folders = [e for e in entries if e.is_dir() and (depth or e.name.casefold() != SCRIPTS_FOLDER)]
+    # The mod's own scripts folder (Lua files in it) isn't a wrapper around its files:
+    # <mod>/<mod v1>/dvdroot_ps4 beside <mod>/scripts/*.lua. A "scripts" folder without them may
+    # be one: <mod>/scripts/dvdroot_ps4 (port-fdab644-F1).
+    own_scripts = not depth and has_scripts(folder)
+    folders = [e for e in entries if e.is_dir() and not (own_scripts and e.name.casefold() == SCRIPTS_FOLDER)]
     if any(e.name.casefold() in GAME_FOLDERS for e in folders):
         return folder, 'dvdroot_ps4'
     if depth < 3 and len(folders) == 1 and not [e for e in entries if e.is_file() and
@@ -87,7 +92,11 @@ def problem(folder):
         return 'empty'
     if any(e.suffix.casefold() in ARCHIVE_SUFFIXES for e in files):
         return 'still an archive: extract it here'
-    if any(e.suffix.casefold() == '.lua' for e in files):
+    lua = [e for e in files if e.suffix.casefold() == '.lua']
+    if lua:
+        scripts = child(folder, SCRIPTS_FOLDER)
+        if any(scripts in e.parents for e in lua):  # in a subfolder of scripts (port-fdab644-N2)
+            return f'Lua scripts go directly in {folder.name}/{scripts.name}/, not in a subfolder'
         return f'Lua scripts go in {folder.name}/{SCRIPTS_FOLDER}/, directly in the mod folder'
     folders = [e for e in folder.iterdir() if e.is_dir() and not e.name.startswith('.')]
     if len(folders) > 1:
