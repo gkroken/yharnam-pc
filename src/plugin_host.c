@@ -178,6 +178,13 @@ static void ini_load(void) {
         char *eq = strchr(s, '=');
         if (!eq || !*section) continue;
         *eq = 0;
+        /* A comment after the value: ; or # with whitespace before it ("randomizer = 0  ; off").
+         * One without ("red;dark") is part of the value. */
+        for (char *c = eq + 1; *c; ++c)
+            if ((*c == ';' || *c == '#') && c > eq + 1 && (c[-1] == ' ' || c[-1] == '\t')) {
+                *c = 0;
+                break;
+            }
         IniEntry *e = &g_ini[g_ini_count++];
         snprintf(e->key, sizeof e->key, "%s.%s", section, trim(s));
         snprintf(e->value, sizeof e->value, "%s", trim(eq + 1));

@@ -203,11 +203,13 @@ int main(void) {
 
     /* 3. plugins.ini: an opt-in plugin turned on with its option, a plugin turned off. */
     /* A BOM straight before the section, as editors that save one write it. */
-    write_ini(user, "\xef\xbb\xbf[plugins]\r\n# comment\r\ngood_b = 0\r\noptin=true\r\n\r\n[optin]\r\ncolor = red\r\n");
+    /* Comments after values, as docs/PLUGINS.md writes them: ; or # with whitespace before. */
+    write_ini(user, "\xef\xbb\xbf[plugins]\r\n# comment\r\ngood_b = 0      ; off\r\noptin=true\t# on\r\n\r\n"
+                    "[optin]\r\ncolor = red;dark   ; a ; without a space before stays in the value\r\n");
     CHECK(bb_plugins_install() == 2);  /* optin and gameplay */
     CHECK(!loaded("good.dll") && loaded("optin.dll"));
     const char *(*option)(void) = (const char *(*)(void))export_of("optin.dll", "test_option");
-    CHECK(option && !strcmp(option(), "red"));
+    CHECK(option && !strcmp(option(), "red;dark"));
     bb_plugins_reset();
 
     /* 4. BB_PLUGINS=0 loads none. */
