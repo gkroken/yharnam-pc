@@ -140,6 +140,14 @@ int main(void) {
     snprintf(user + strlen(user), MAX_PATH - strlen(user), "bb-flag-delivery-test-%lu", GetCurrentProcessId());
     CreateDirectoryA(user, NULL);
     set_env("BB_GPU_USER_DIR", user);
+    {
+        /* force_on may warp by the player's say-so ([warps]); late may not. */
+        char ini[MAX_PATH];
+        snprintf(ini, sizeof ini, "%s\\plugins.ini", user);
+        FILE *f = fopen(ini, "wb");
+        fputs("[warps]\nforce_on = 1\n", f);
+        fclose(f);
+    }
     set_env("BB_EBOOT_109", "1");
     set_env("BB_PLUGINS", "");
     set_env("BB_ONLINE", "");
@@ -357,6 +365,30 @@ int main(void) {
         put32(main_chr + 0x3f8, 0xffffffffu);  /* between maps: refused */
         CHECK(warp(1.0f) == 1 && lamp(2412951) == 1);
         set_env("BB_TEST_WARP", "");
+        /* plugins.ini's [warps] force_on = 1: force_on may warp, unflagged; late may not; never
+         * online. Asked from each plugin's own on_frame, where the host knows who asks. */
+        put32(main_chr + 0x3f8, 0x18010000);
+        void (*ask_granted)(float) = (void (*)(float))export_of("force_on.dll", "warp_in_frame");
+        int (*granted_result)(void) = (int (*)(void))export_of("force_on.dll", "frame_warp_result");
+        void (*ask_late)(float) = (void (*)(float))export_of("late.dll", "warp_in_frame");
+        int (*late_result)(void) = (int (*)(void))export_of("late.dll", "frame_warp_result");
+        CHECK(ask_granted && granted_result && ask_late && late_result);
+        ask_late(1.0f);
+        ask_granted(4.0f);
+        bb_plugins_frame();  /* both ask in their on_frame; the granted warp is made next frame */
+        CHECK(late_result() == 1 && granted_result() == 0);
+        bb_plugins_frame();
+        CHECK(warp_logged == 3 && warp_log[2] == 1 && warped_x == 4.0f);
+        set_env("BB_ONLINE", "1");
+        ask_granted(5.0f);
+        bb_plugins_frame();
+        CHECK(granted_result() == 1);
+        set_env("BB_COOP", "1");  /* seamless co-op isn't "online play" */
+        ask_granted(6.0f);
+        bb_plugins_frame();
+        CHECK(granted_result() == 0);
+        set_env("BB_COOP", "");
+        set_env("BB_ONLINE", "");
     }
 
     printf("flag delivery: %d checks passed\n", checks);

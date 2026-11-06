@@ -191,16 +191,17 @@ static const char *ini_get(const char *key) {
     return NULL;
 }
 
-/* 1 on, 0 off, -1 not said. */
-static int ini_switch(const char *name) {
+/* [section] name = on/off: 1 on, 0 off, -1 not said. */
+static int ini_switch_in(const char *section, const char *name) {
     char key[128];
-    snprintf(key, sizeof key, "plugins.%s", name);
+    snprintf(key, sizeof key, "%s.%s", section, name);
     const char *v = ini_get(key);
     if (!v) return -1;
     if (!_stricmp(v, "1") || !_stricmp(v, "true") || !_stricmp(v, "on")) return 1;
     if (!_stricmp(v, "0") || !_stricmp(v, "false") || !_stricmp(v, "off")) return 0;
     return -1;
 }
+static int ini_switch(const char *name) { return ini_switch_in("plugins", name); }
 
 /* --- addresses ----------------------------------------------------------------------------- */
 
@@ -406,12 +407,21 @@ static struct {
     int owner, lamp_owner;
 } g_warp;
 
+/* Who may warp: a plugin flagged BB_PLUGIN_OPT_IN | BB_PLUGIN_GAMEPLAY (the player turned it on,
+ * and online play leaves it out), or one the player lets warp in plugins.ini's [warps] section
+ * (`lua = 1`: the Lua host's scripts), never in online play; or BB_TEST_WARP=1 for tests. */
 static int warps_allowed(const char *what) {
     if (env_is("BB_TEST_WARP", "1")) return 1;
     const int i = t_current;
     const uint32_t need = BB_PLUGIN_OPT_IN | BB_PLUGIN_GAMEPLAY;
     if (i >= 0 && i < g_count && g_plugins[i].info && (g_plugins[i].info->flags & need) == need) return 1;
-    api_log("%s: only for a plugin flagged BB_PLUGIN_OPT_IN | BB_PLUGIN_GAMEPLAY (or BB_TEST_WARP=1)", what);
+    if (i >= 0 && i < g_count && ini_switch_in("warps", g_plugins[i].name) == 1) {
+        if (!online_play()) return 1;
+        api_log("%s: refused in online play", what);
+        return 0;
+    }
+    api_log("%s: only for a plugin flagged BB_PLUGIN_OPT_IN | BB_PLUGIN_GAMEPLAY, or one let warp in "
+            "plugins.ini ([warps] %s = 1)", what, i >= 0 && i < g_count ? g_plugins[i].name : "<plugin>");
     return 0;
 }
 

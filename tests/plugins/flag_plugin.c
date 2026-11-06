@@ -63,8 +63,26 @@ BB_PLUGIN_EXPORT int chr_count(size_t *count) { return g_api->chr_list(0, 0, cou
 
 BB_PLUGIN_EXPORT const BbPluginInfo bb_plugin_info = {BB_PLUGIN_API_VERSION, 0, NAME, NAME, "1", "tests", "flags"};
 
+/* A warp asked from the plugin's own on_frame, where the host knows which plugin calls. */
+static float g_frame_warp_x;
+static int g_frame_warp_pending, g_frame_warp_result = -1;
+static void frame(void *user) {
+    (void)user;
+    if (!g_frame_warp_pending) return;
+    g_frame_warp_pending = 0;
+    const float xyz[3] = {g_frame_warp_x, 0.0f, 0.0f};
+    g_frame_warp_result = g_api->player_warp(0, xyz, 0.0f);
+}
+BB_PLUGIN_EXPORT void warp_in_frame(float x) {
+    g_frame_warp_x = x;
+    g_frame_warp_pending = 1;
+    g_frame_warp_result = -1;
+}
+BB_PLUGIN_EXPORT int frame_warp_result(void) { return g_frame_warp_result; }
+
 BB_PLUGIN_EXPORT int bb_plugin_image(const BbHostApi *api) {
     g_api = api;
+    if (api->on_frame(frame, 0)) return 1;
 #if VARIANT == 3
     return api->on_world_load(on_load, 0);
 #else
