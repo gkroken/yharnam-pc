@@ -394,6 +394,28 @@ class GameTalkTests(unittest.TestCase):
         self.assertEqual(took, 51, refused)
         self.assertEqual(sorted(r[0] for r in refused), ['t100000', 't290000'])
 
+    def test_menu_2_edits_the_second_menu_only(self):
+        # port-27e99b4-N1: t210630 (Hunter's Dream) has two menus; menu = 2 is the second in the
+        # file, and only it gains the entry.
+        dream = dcx_decompress((self.talk / 'm21_00_00_00.talkesdbnd.dcx').read_bytes())
+
+        def menus(data):
+            archive = se.Bnd4(data)
+            script = se.esd.parse(archive.files[archive.index('\\t210630.esd')])
+            return [[(script.cmds[c].bank, script.cmds[c].id,
+                      [script.exprs[i].code for i in script.runs[script.cmds[c].args].items])
+                     for c in script.runs[st.entry].items]
+                    for st in script.states if st.entry >= 0 and se.SHOW_MENU in
+                    [(script.cmds[c].bank, script.cmds[c].id) for c in script.runs[st.entry].items]]
+
+        before = menus(dream)
+        self.assertEqual(len(before), 2)
+        after = menus(se.apply_talk(dream, [se.TalkOption('t210630', 15000000, 12401902, menu=2)]))
+        self.assertEqual(after[0], before[0])
+        added = [c for c in after[1] if c not in before[1]]
+        self.assertEqual([(b, i, args[1]) for b, i, args in added],
+                         [(1, 19, se.esd.done(se.esd.lit(15000000)))])
+
     def test_refusals(self):
         # A menu with two branches for a closed menu (Gilbert's with its last one twice): which
         # one an added option should leave by is unknown, so it's refused.
