@@ -16,12 +16,22 @@ InitializeEvent(0, <id>, 0) for it.
 
 Plain instruction lists only: an event with parameters, or with MattScript (if/else, goto,
 labels, const), is refused with why.
+
+A compiled event file (Soulstruct's output, DarkScript3's saved .emevd.dcx, any tool's) needs no
+table: --game <game folder> compares it with the game's file of the same name, and the events the
+game's lacks (or --events) come out with their arguments as bytes (hex = "..."):
+
+    python scripts/script_convert.py m24_01_00_00.emevd.dcx --game <game> --out <edit file>
+
+sys.path gets this folder for emevd.py and fromsoft.py, which that needs.
 """
 import argparse
 import json
 from pathlib import Path
 import re
 import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # EMEDF argument types: script_edits' type names.
 TYPES = {0: 'u8', 1: 'u16', 2: 'u32', 3: 's8', 4: 's16', 5: 's32', 6: 'f32', 8: 'u32'}
@@ -171,17 +181,83 @@ def convert(text, table, wanted):
     return '\n'.join(out) + '\n'
 
 
+def _emevd(data):
+    """An Emevd of an event file's bytes, DCX-compressed or not."""
+    from emevd import Emevd, EmevdError
+    from fromsoft import FormatError, dcx_decompress
+    try:
+        return Emevd(dcx_decompress(data) if data[:4] == b'DCX\0' else data)
+    except (EmevdError, FormatError) as error:
+        raise ConvertError(f'not an event file this can read ({error})') from None
+
+
+REST_NAMES = {0: 'default', 1: 'restart', 2: 'end'}
+
+
+def convert_compiled(mine, game, wanted=None):
+    """The edit file (TOML text) for the events of the event file `mine` (bytes, as Soulstruct,
+    DarkScript3 or any tool compiles it) that the game's own `game` doesn't have: those in
+    `wanted`, else all of them. No instruction table is needed: the arguments are copied as bytes."""
+    import struct
+    ours, theirs = _emevd(mine), _emevd(game)
+    ids = [struct.unpack_from('<q', row)[0] for row in ours.events]
+    rows = dict(zip(ids, ours.events))
+    present = {struct.unpack_from('<q', row)[0] for row in theirs.events}
+    if wanted is None:
+        wanted = [i for i in ids if i not in present]
+        if not wanted:
+            raise ConvertError('the file has no event the game\'s file doesn\'t have')
+    started = {struct.unpack_from('<iii', args)[1] for bank, code, args in
+               (ours.event_instructions(0) if 0 in rows else [])
+               if (bank, code) == (2000, 0) and len(args) == 12 and args[:4] == b'\0' * 4
+               and args[8:] == b'\0' * 4}
+    out = ['# Made by script_convert.py from a compiled event file: arguments as their bytes (hex).']
+    for event_id in wanted:
+        if event_id not in rows:
+            raise ConvertError(f'event {event_id} is not in the file')
+        if event_id in present:
+            raise ConvertError(f'event {event_id} is in the game\'s file too: an edit only adds events')
+        row = rows[event_id]
+        params, rest = struct.unpack_from('<q', row, 24)[0], struct.unpack_from('<q', row, 40)[0]
+        if params:
+            raise ConvertError(f'event {event_id} has parameters: not converted')
+        if rest not in REST_NAMES:
+            raise ConvertError(f'event {event_id}: rest behaviour {rest} is not 0, 1 or 2')
+        lines = [f'    {{ bank = {bank}, id = {code}, hex = "{args.hex()}" }},'
+                 for bank, code, args in ours.event_instructions(event_id)]
+        if not lines:
+            raise ConvertError(f'event {event_id} has no instructions')
+        out += ['', '[[event]]', f'id = {event_id}', f'restart = "{REST_NAMES[rest]}"',
+                f'run = {"true" if event_id in started else "false"}', 'instructions = [', *lines, ']']
+    return '\n'.join(out) + '\n'
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument('script', type=Path, help="DarkScript3's text of the event file (.js)")
-    parser.add_argument('--emedf', type=Path, required=True, help="your DarkScript3's bb-common.emedf.json")
-    parser.add_argument('--events', required=True, help='the ids of the events you added, comma-separated')
+    parser.add_argument('script', type=Path,
+                        help="DarkScript3's text of the event file (.js), or a compiled event file "
+                             "(.emevd or .emevd.dcx, as Soulstruct or DarkScript3 saves it)")
+    parser.add_argument('--emedf', type=Path, help="for .js: your DarkScript3's bb-common.emedf.json")
+    parser.add_argument('--game', type=Path, help='for a compiled file: the game folder (with dvdroot_ps4), '
+                        'whose event file of the same name it is compared with')
+    parser.add_argument('--events', help='the ids of the events you added, comma-separated (for a '
+                        'compiled file: default, every event the game\'s file lacks)')
     parser.add_argument('--out', type=Path, help='the edit file to write (UTF-8); else standard output')
     args = parser.parse_args(argv)
     try:
-        wanted = [int(x) for x in args.events.split(',') if x.strip()]
-        table = load_emedf(args.emedf.read_text(encoding='utf-8-sig'))
-        text = convert(args.script.read_text(encoding='utf-8-sig'), table, wanted)
+        wanted = [int(x) for x in args.events.split(',') if x.strip()] if args.events else None
+        name = args.script.name
+        if name.casefold().endswith(('.emevd', '.emevd.dcx')):
+            if not args.game:
+                raise ConvertError('a compiled event file needs --game, to compare it with the game\'s')
+            stem = name[:name.casefold().index('.emevd')]
+            game_file = args.game / 'dvdroot_ps4' / 'event' / f'{stem}.emevd.dcx'
+            text = convert_compiled(args.script.read_bytes(), game_file.read_bytes(), wanted)
+        else:
+            if not args.emedf or not wanted:
+                raise ConvertError('DarkScript3 text needs --emedf and --events')
+            table = load_emedf(args.emedf.read_text(encoding='utf-8-sig'))
+            text = convert(args.script.read_text(encoding='utf-8-sig'), table, wanted)
         if args.out:
             args.out.parent.mkdir(parents=True, exist_ok=True)  # a new mod's edits\event (tool-e0f3993-F1)
             args.out.write_text(text, encoding='utf-8', newline='\n')  # never the shell's encoding

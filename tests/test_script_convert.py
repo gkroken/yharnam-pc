@@ -4,6 +4,7 @@ is a small one written for the test, in the EMEDF JSON shape (DarkScript3's own 
 from paths import ROOT
 import io
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -139,6 +140,98 @@ class ConvertTests(unittest.TestCase):
             with unittest.mock.patch('sys.stderr', err):
                 self.assertEqual(sc.main([str(js), '--emedf', str(emedf), '--events', '12415992']), 1)
             self.assertIn('script_convert: event 12415992 has parameters', err.getvalue())
+
+
+class CompiledTests(unittest.TestCase):
+    """A compiled event file (Soulstruct's, DarkScript3's saved one): the events the game's file
+    lacks, with their arguments as bytes."""
+
+    def setUp(self):
+        from test_script_edits import small_emevd
+        from emevd import Emevd
+        import struct
+        self.struct = struct
+        self.game = small_emevd()
+        mine = Emevd(self.game)
+        mine.append_initialized_event(777, [(2003, 2, struct.pack('<iB3x', 12401900, 1)),
+                                             (1001, 0, struct.pack('<f', 1.5))])
+        struct.pack_into('<q', mine.events[-1], 40, 1)  # restart
+        mine.append_event(778, [(1000, 4, b'\x01\0\0\0')])
+        self.mine = mine.to_bytes()
+
+    def test_new_events_come_out_as_bytes_and_apply_to_the_game_file_as_they_were(self):
+        from fromsoft import dcx_compress
+        from emevd import Emevd
+        text = sc.convert_compiled(dcx_compress(self.mine), dcx_compress(self.game))
+        self.assertIn('{ bank = 2003, id = 2, hex = "ec3cbd0001000000" },', text)
+        events = se.parse(text)
+        self.assertEqual([(e.id, e.run, e.restart) for e in events], [(777, True, 1), (778, False, 0)])
+        applied = Emevd(se.apply(self.game, events))
+        ours = Emevd(self.mine)
+        for event_id in (777, 778):
+            self.assertEqual(applied.event_instructions(event_id), ours.event_instructions(event_id))
+        self.assertEqual(applied.event_instructions(0), ours.event_instructions(0))
+        self.assertEqual([e.id for e in se.parse(sc.convert_compiled(self.mine, self.game, [778]))], [778])
+
+    def test_what_isnt_converted_says_why(self):
+        cases = (([50], "event 50 is in the game's file too: an edit only adds events"),
+                 ([999], 'event 999 is not in the file'))
+        for wanted, why in cases:
+            with self.subTest(wanted=wanted):
+                with self.assertRaises(sc.ConvertError) as caught:
+                    sc.convert_compiled(self.mine, self.game, wanted)
+                self.assertIn(why, str(caught.exception))
+        with self.assertRaises(sc.ConvertError) as caught:
+            sc.convert_compiled(self.game, self.game)
+        self.assertIn("no event the game's file doesn't have", str(caught.exception))
+        with self.assertRaises(sc.ConvertError) as caught:
+            sc.convert_compiled(b'EVD\0 not really', self.game)
+        self.assertIn('not an event file this can read', str(caught.exception))
+
+    def test_hex_instructions_in_edit_files(self):
+        self.assertEqual(se.raw({'bank': 1, 'id': 2, 'hex': 'ec3cbd00'}), (1, 2, bytes.fromhex('ec3cbd00')))
+        for table, why in (({'bank': 1, 'id': 2, 'hex': 'abc'}, 'a multiple of 4'),
+                           ({'bank': 1, 'id': 2, 'hex': 'ec3cbd'}, 'a multiple of 4'),
+                           ({'bank': 1, 'id': 2, 'hex': 'zz3cbd00'}, 'a multiple of 4'),
+                           ({'bank': 1, 'id': 2, 'hex': 'ec3cbd00', 'args': []}, 'args (or hex)')):
+            with self.subTest(table=table):
+                with self.assertRaises(se.EditError) as caught:
+                    se.raw(table)
+                self.assertIn(why, str(caught.exception))
+
+    def test_the_command_line_compares_with_the_games_file_of_that_name(self):
+        from fromsoft import dcx_compress
+        with tempfile.TemporaryDirectory() as temp:
+            game = Path(temp) / 'game'
+            (game / 'dvdroot_ps4/event').mkdir(parents=True)
+            (game / 'dvdroot_ps4/event/m24_01_00_00.emevd.dcx').write_bytes(dcx_compress(self.game))
+            mine = Path(temp) / 'm24_01_00_00.emevd.dcx'
+            mine.write_bytes(dcx_compress(self.mine))
+            out = Path(temp) / 'mods/new/edits/event/m24_01_00_00.emevd.edit.toml'
+            self.assertEqual(sc.main([str(mine), '--game', str(game), '--out', str(out)]), 0)
+            self.assertEqual([e.id for e in se.parse(se.read_text(out))], [777, 778])
+            err = io.StringIO()
+            with unittest.mock.patch('sys.stderr', err):
+                self.assertEqual(sc.main([str(mine)]), 1)
+            self.assertIn('needs --game', err.getvalue())
+
+
+GAME = Path(os.environ['BB_TEST_GAME_DIR']) if os.environ.get('BB_TEST_GAME_DIR') else None
+
+
+@unittest.skipUnless(GAME, 'BB_TEST_GAME_DIR not set')
+class CompiledGameTests(unittest.TestCase):
+    def test_an_event_with_parameters_is_refused(self):
+        import struct
+        from test_script_edits import small_emevd
+        from fromsoft import dcx_decompress
+        from emevd import Emevd
+        real = dcx_decompress((GAME / 'dvdroot_ps4/event/m24_01_00_00.emevd.dcx').read_bytes())
+        with_params = next(struct.unpack_from('<q', row)[0] for row in Emevd(real).events
+                           if struct.unpack_from('<q', row, 24)[0])
+        with self.assertRaises(sc.ConvertError) as caught:
+            sc.convert_compiled(real, small_emevd(), [with_params])
+        self.assertIn(f'event {with_params} has parameters', str(caught.exception))
 
 
 if __name__ == '__main__':

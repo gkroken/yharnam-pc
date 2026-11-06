@@ -153,13 +153,24 @@ def named(text):
 
 
 def raw(table):
-    unknown = set(table) - {'bank', 'id', 'args'}
-    if unknown or not {'bank', 'id'} <= set(table):
-        raise EditError(f'a raw instruction has bank, id and args, not {sorted(table)}')
+    """A raw instruction: bank, id and either typed args or hex, its argument bytes as written in an
+    event file (what script_convert.py takes from a compiled one)."""
+    unknown = set(table) - {'bank', 'id', 'args', 'hex'}
+    if unknown or not {'bank', 'id'} <= set(table) or {'args', 'hex'} <= set(table):
+        raise EditError(f'a raw instruction has bank, id and args (or hex), not {sorted(table)}')
     bank, code, args = table['bank'], table['id'], table.get('args', [])
     for value in (bank, code):
         if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 0x7fffffff:
             raise EditError(f'bank and id must be numbers from 0, not {value!r}')
+    if 'hex' in table:
+        text = table['hex']
+        try:
+            data = bytes.fromhex(text) if isinstance(text, str) else None
+        except ValueError:
+            data = None
+        if data is None or len(data) % 4:
+            raise EditError(f'hex is the arguments\' bytes, a multiple of 4 ("ec3cbd0001000000"), not {text!r}')
+        return bank, code, data
     if not isinstance(args, list):
         raise EditError('args must be a list such as ["s32:1234", "u8:1"]')
     typed = []

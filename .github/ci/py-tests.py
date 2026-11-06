@@ -26,6 +26,7 @@ EXPECTED_SKIPS = {
     'test_paramdefs.GameTests.': 'reads the game files: no BB_TEST_GAME_DIR in CI',
     'test_script_edits.GameFileTests.': 'reads the game files: no BB_TEST_GAME_DIR in CI',
     'test_script_edits.GameTalkTests.': 'reads the game files: no BB_TEST_GAME_DIR in CI',
+    'test_script_convert.CompiledGameTests.': 'reads the game files: no BB_TEST_GAME_DIR in CI',
 }
 
 
