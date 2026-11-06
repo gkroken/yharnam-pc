@@ -199,6 +199,16 @@ class BuildTests(unittest.TestCase):
         self.build([(name, folder)])
         self.assertEqual(ids(self.result()), [0, 50, 12405000])
 
+    def test_an_edit_file_in_utf16_applies(self):
+        # tool-97b03e7-F1: Windows PowerShell 5.1's `>` and Notepad's "Unicode" write UTF-16.
+        for encoding, bom in (('utf-16-le', b'\xff\xfe'), ('utf-16-be', b'\xfe\xff')):
+            with self.subTest(encoding=encoding):
+                name, folder = self.mod('U16' + encoding[-2:], '')
+                (folder / 'edits/event/m24_01_00_00.emevd.edit.toml').write_bytes(bom + EDIT_A.encode(encoding))
+                self.lines.clear()
+                self.build([(name, folder)])
+                self.assertEqual(ids(self.result()), [0, 50, 12405000], self.lines)
+
     def test_nothing_written_when_nothing_applies(self):
         self.assertIsNone(self.build([self.mod('Bad', 'nonsense = ')]))
         self.assertFalse((self.root / 'out').exists())

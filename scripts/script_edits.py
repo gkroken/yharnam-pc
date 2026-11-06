@@ -380,6 +380,15 @@ KINDS = {
 }
 
 
+def read_text(path):
+    """An edit file's text: UTF-16 by its BOM (Windows PowerShell 5.1's `>`, Notepad's "Unicode"),
+    else UTF-8 with or without a BOM (port-a2866f9-F2, tool-97b03e7-F1)."""
+    data = Path(path).read_bytes()
+    if data[:2] in (b'\xff\xfe', b'\xfe\xff'):
+        return data.decode('utf-16')
+    return data.decode('utf-8-sig')
+
+
 def _child(folder, name):
     """`name` in `folder`, matched case-insensitively, as mods.child does."""
     for entry in (folder.iterdir() if folder.is_dir() else ()):
@@ -429,8 +438,7 @@ def build(base, mods, out, log=print):
         applied = []
         for name, path in edits:
             try:
-                # utf-8-sig: Windows editors and PowerShell 5.1 write a BOM (port-a2866f9-F2).
-                data = edit(data, read(path.read_text(encoding='utf-8-sig')))
+                data = edit(data, read(read_text(path)))
             except (EditError, OSError, UnicodeDecodeError) as error:
                 log(f'Script edits: {name}: {path.name}: {error}; left out')
                 continue

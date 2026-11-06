@@ -3,11 +3,13 @@
 """Turn events written in DarkScript3 into an event edit file (script_edits.py), at authoring time.
 
     python scripts/script_convert.py <map>.emevd.js --emedf <bb-common.emedf.json> --events 12415990,...
+        --out <mod>/edits/event/<map>.emevd.edit.toml
 
 <map>.emevd.js is DarkScript3's text of an event file (File > Save as JS, or its editor's text),
 with the events you added; --events names them (the rest of the file is the game's and stays
 out). The instruction table is the one your DarkScript3 has (Resources/bb-common.emedf.json): its
-names and argument types, read here and never shipped. The edit file goes to standard output,
+names and argument types, read here and never shipped. The edit file goes to --out (UTF-8, whatever
+the shell would write), else standard output,
 with every instruction raw (bank, id, typed arguments), so it needs neither DarkScript3 nor the
 table to apply. An event is started from the map (run = true) when the file's event 0 has
 InitializeEvent(0, <id>, 0) for it.
@@ -174,11 +176,16 @@ def main(argv=None):
     parser.add_argument('script', type=Path, help="DarkScript3's text of the event file (.js)")
     parser.add_argument('--emedf', type=Path, required=True, help="your DarkScript3's bb-common.emedf.json")
     parser.add_argument('--events', required=True, help='the ids of the events you added, comma-separated')
+    parser.add_argument('--out', type=Path, help='the edit file to write (UTF-8); else standard output')
     args = parser.parse_args(argv)
     try:
         wanted = [int(x) for x in args.events.split(',') if x.strip()]
         table = load_emedf(args.emedf.read_text(encoding='utf-8-sig'))
-        sys.stdout.write(convert(args.script.read_text(encoding='utf-8-sig'), table, wanted))
+        text = convert(args.script.read_text(encoding='utf-8-sig'), table, wanted)
+        if args.out:
+            args.out.write_text(text, encoding='utf-8', newline='\n')  # never the shell's encoding
+        else:
+            sys.stdout.write(text)
     except (ConvertError, ValueError, KeyError, OSError) as error:
         print(f'script_convert: {error}', file=sys.stderr)
         return 1
