@@ -109,15 +109,12 @@ def instruction(statement, table):
         raise ConvertError(f'{name}: not an instruction of this EMEDF (or two have that name)')
     bank, code, full, layout = found
     parts = [p.strip() for p in inner.split(',')] if inner.strip() else []
-    # Trailing arguments left out take the table's defaults, as DarkScript3 lets them
-    # (port-3b6ed37-N1); one without a default must be written.
-    filled = []
-    if len(parts) < len(layout) and all(d is not None for _k, _e, d in layout[len(parts):]):
-        filled = [str(d) for _k, _e, d in layout[len(parts):]]
-    parts_given = parts
-    parts = parts + filled
+    # Every argument must be written. DarkScript3's table gives every argument a default, so a
+    # default doesn't mean it may be left out; filling one in would turn a forgotten flag into
+    # flag 0 (port-f4dfb7e-F1).
     if len(parts) != len(layout):
-        raise ConvertError(f'{name} ({full}) takes {len(layout)} arguments, not {len(parts_given)}')
+        raise ConvertError(f'{name} ({full}) takes {len(layout)} arguments, not {len(parts)}: '
+                           'write every one')
     args = []
     for part, (kind, enum, _default) in zip(parts, layout):
         value = _number(part)
@@ -128,10 +125,7 @@ def instruction(statement, table):
         if kind != 'f32' and isinstance(value, float):
             raise ConvertError(f'{name}: {part!r} is not a whole number')
         args.append(f'{kind}:{value}')
-    comment = f'{name}({", ".join(parts_given)})'
-    if filled:
-        comment += f'; defaults filled in: {", ".join(filled)}'
-    return {'bank': bank, 'id': code, 'args': args}, comment
+    return {'bank': bank, 'id': code, 'args': args}, f'{name}({", ".join(parts)})'
 
 
 def _toml_instruction(raw):

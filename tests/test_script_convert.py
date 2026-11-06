@@ -16,15 +16,16 @@ import script_edits as se  # noqa: E402
 
 # Four instructions, with the layouts script_edits' built-ins have, in the EMEDF shape (types:
 # 0 u8, 3 s8, 5 s32, 6 f32), a // comment line as DarkScript3's files have, and two
-# instructions of one name (never guessed).
+# instructions of one name (never guessed). Every argument has a default, as in DarkScript3's
+# own table (port-f4dfb7e-F1).
 EMEDF = '''{
   "main_classes": [
     {"index": 3, "instrs": [{"name": "IF Event Flag", "index": 0, "args": [
-      {"type": 3, "enum_name": "Condition Group"}, {"type": 0, "enum_name": "ON/OFF/CHANGE"},
-      {"type": 0, "enum_name": "Target Event Flag Type", "default": 0}, {"type": 5}]}]},
+      {"type": 3, "enum_name": "Condition Group", "default": 0}, {"type": 0, "enum_name": "ON/OFF/CHANGE", "default": 0},
+      {"type": 0, "enum_name": "Target Event Flag Type", "default": 0}, {"type": 5, "default": 0}]}]},
     {"index": 1001, "instrs": [{"name": "WAIT Fixed Time (Seconds)", "index": 0, "args": [{"type": 6, "default": 0.0}]}]},
     {"index": 2003, "instrs": [{"name": "Set Event Flag", "index": 2, "args": [
-      {"type": 5}, {"type": 0, "enum_name": "ON/OFF"}]},
+      {"type": 5, "default": 0}, {"type": 0, "enum_name": "ON/OFF", "default": 0}]},
       {"name": "Twice", "index": 90, "args": []}, {"name": "Twice", "index": 91, "args": []}]}
   ],
   "enums": [
@@ -110,12 +111,10 @@ class ConvertTests(unittest.TestCase):
         self.assertIn('run = false', sc.convert(SCRIPT.replace('function(X0_4)', 'function()')
                                                 .replace('X0_4', '1'), self.table, [12415992]))
 
-    def test_trailing_arguments_left_out_take_the_tables_defaults(self):
-        # port-3b6ed37-N1: as DarkScript3 lets them; one without a default must be written.
-        text = sc.convert('$Event(5, Default, function() { WaitFixedTimeSeconds(); });', self.table, [5])
-        self.assertIn('args = ["f32:0.0"] },  # WaitFixedTimeSeconds(); defaults filled in: 0.0', text)
-        self.assertEqual(se.parse(text)[0].instructions, [se.raw({'bank': 1001, 'id': 0, 'args': ['f32:0']})])
-        for statement, why in (('SetEventFlag(5);', 'takes 2 arguments, not 1'),
+    def test_every_argument_must_be_written_though_the_table_has_defaults(self):
+        # port-f4dfb7e-F1: filling defaults made IfEventFlag(MAIN, ON) wait on flag 0.
+        for statement, why in (('WaitFixedTimeSeconds();', 'takes 1 arguments, not 0: write every one'),
+                               ('SetEventFlag(5);', 'takes 2 arguments, not 1'),
                                ('IfEventFlag(MAIN, ON);', 'takes 4 arguments, not 2')):
             with self.subTest(statement=statement):
                 with self.assertRaises(sc.ConvertError) as caught:
