@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # The plugins branch on Windows: build the port as build.sh does (MSYS2 CLANG64), then run the
-# plugin host's own tests. None needs the game: the tests use fake hosts and test plugins.
+# tests: every CMake "*-test" target (.github/ci/c-tests.sh says which can't run here and why)
+# and the Python tests of the branch's code (.github/ci/py-tests.py). None needs the game.
+#
+# The actions are pinned by commit; the comment names the release.
 #
 # A failing step also writes its log's tail as an error annotation, which the public check-runs
 # API serves without signing in (job logs need a token):
@@ -32,13 +35,13 @@ jobs:
         shell: pwsh
         run: git config --global core.autocrlf false
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: recursive
 
       # release: false uses the runner's own C:\msys64, where msys2-env.sh looks for it.
       # The packages are packaging/windows/README.md's list.
-      - uses: msys2/setup-msys2@v2
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e  # v2.33.0
         with:
           msystem: CLANG64
           release: false
@@ -72,44 +75,18 @@ jobs:
           cat out-build.log
           test -f out/bb-probe.exe
 
-      # The tests of what this branch adds or hooks. EXCLUDE_FROM_ALL targets: built one by one.
-      - name: Plugin host tests (C)
+      - name: C tests
         shell: msys2 {0}
-        run: |
-          annotate() {
-            local text; text=$(tail -40 "$2" | sed -e 's/%/%25/g' -e 's/\r//g')
-            echo "::error title=$1::${text//$'\n'/%0A}"
-          }
-          mkdir -p out/ci
-          failed=0
-          for t in plugin-host-test flag-delivery-test game-state-test params-test text-test \
-                   input-take-test engine-hooks-test input-bindings-test; do
-            if ! ninja -C out/gpu "$t" > "out/ci/build-$t.log" 2>&1; then
-              echo "BUILD FAILED $t"; annotate "$t did not build" "out/ci/build-$t.log"; failed=1; continue
-            fi
-            if timeout 300 "out/gpu/$t.exe" > "out/ci/run-$t.log" 2>&1; then
-              echo "PASS $t: $(tail -1 "out/ci/run-$t.log")"
-            else
-              echo "FAIL $t"; cat "out/ci/run-$t.log"; annotate "$t failed" "out/ci/run-$t.log"; failed=1
-            fi
-          done
-          exit $failed
+        run: bash .github/ci/c-tests.sh
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: '3.13'
 
-      # The launcher's plugins page and the param-name reader; standard library only. The
-      # paramdefs tests that read the game's files skip without BB_TEST_GAME_DIR.
-      - name: Launcher and paramdefs tests (Python)
+      # bb-probe.exe (test_probe) needs CLANG64's DLLs on PATH, as tools/test-port.sh gives it.
+      - name: Python tests
         shell: bash
-        working-directory: tests
         run: |
-          mkdir -p ../out/ci
-          if ! python -m unittest -v test_launcher_plugins test_paramdefs > ../out/ci/python.log 2>&1; then
-            cat ../out/ci/python.log
-            text=$(tail -40 ../out/ci/python.log | sed -e 's/%/%25/g' -e 's/\r//g')
-            echo "::error title=Python tests failed::${text//$'\n'/%0A}"
-            exit 1
-          fi
-          cat ../out/ci/python.log
+          py=$(command -v python)  # setup-python's, found before CLANG64 (which has its own) goes first
+          "$py" --version
+          PATH="/c/msys64/clang64/bin:$PATH" "$py" .github/ci/py-tests.py
