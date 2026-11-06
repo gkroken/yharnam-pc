@@ -610,8 +610,9 @@ def script_edits_layer(game, layers, generated, out):
         import script_edits
         layer = script_edits.build(resolved(game, layers), edited, out,
                                    log=lambda line: print(line, file=sys.stderr))
-    except (ImportError, OSError, ValueError) as error:  # ImportError: a Python without tomllib
-        print(f'Script edits: none applied ({error})', file=sys.stderr)
+    except Exception as error:  # noqa: BLE001 - never stops the start (port-a2866f9-F1);
+        # ImportError: a Python without tomllib
+        print(f'Script edits: none applied ({type(error).__name__}: {error})', file=sys.stderr)
         return []
     return [('script_edits', layer)] if layer else []
 

@@ -16,6 +16,9 @@ MODULES = ['test_launcher_plugins', 'test_paramdefs', 'test_probe', 'test_mods',
 DESELECT = {
     'test_probe.LoaderTests.test_illegal_instruction_reports_guest_offset':
         'expects a POSIX signal code; known Windows failure (port-b4ae1ae-N2)',
+    'test_mods.ModTests.test_mod_symlinks_rejected':
+        'errors instead of skipping without the symlink privilege; known Windows failure '
+        '(tools/test-baseline.txt, port-a2866f9-N3)',
 }
 # Test id or class id prefix -> why it may skip here.
 EXPECTED_SKIPS = {

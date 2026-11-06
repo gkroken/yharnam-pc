@@ -87,6 +87,10 @@ class ParseTests(unittest.TestCase):
             '[[event]]\nid = 1\ninstructions = ["Explode(5)"]': 'not a built-in instruction',
             '[[event]]\nid = 1\ninstructions = ["SetEventFlag(5000000000, ON)"]': 'is not a s32',
             '[[event]]\nid = 1\ninstructions = ["SetEventFlag(1.5, ON)"]': 'is not a s32',
+            '[[event]]\nid = 1\ninstructions = [{bank = 1, id = 2, args = ["u8:300"]}]': '300 is not a u8',
+            '[[event]]\nid = 1\ninstructions = [{bank = 1, id = 2, args = ["s8:-129"]}]': '-129 is not a s8',
+            '[[event]]\nid = 1\ninstructions = [{bank = 1001, id = 0, args = ["f32:1e40"]}]':
+                'does not fit a f32',
             '[[event]]\nid = 1\ninstructions = [{bank = 1, id = 2, args = ["i32:3"]}]': 'type one of',
             '[[event]]\nid = 1\ninstructions = [{bank = -1, id = 2}]': 'bank and id',
             '[[event]]\nid = 0\ninstructions = ["EndUnconditionally(End)"]': 'id must be a number above 0',
@@ -110,7 +114,9 @@ class BuildTests(unittest.TestCase):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
-        self.original = dcx_compress(small_emevd())
+        original = bytearray(dcx_compress(small_emevd()))
+        original[0x30] = 7  # the compression level field: kept from the original, not rewritten
+        self.original = bytes(original)
         self.files = {'dvdroot_ps4/event/m24_01_00_00.emevd.dcx': self.original}
         self.lines = []
 
@@ -142,9 +148,11 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(script.event_instructions(50), [(1000, 4, b'\x01\0\0\0')])
         self.assertEqual(script.event_instructions(0)[0], (1000, 4, b'\0\0\0\0'))
         self.assertIn('Script edits: dvdroot_ps4/event/m24_01_00_00.emevd.dcx: A, B', self.lines)
-        # The DCX header is the original's but for the sizes.
+        # The DCX header is the original's but for the two sizes at 0x1c (port-a2866f9-N2).
         written = (self.root / 'out/dvdroot_ps4/event/m24_01_00_00.emevd.dcx').read_bytes()
         self.assertEqual(written[:0x1c], self.original[:0x1c])
+        self.assertEqual(written[0x24:0x4c], self.original[0x24:0x4c])
+        self.assertEqual(written[0x30], 7)
 
     def test_a_failing_mod_is_left_out_whole_and_the_others_apply(self):
         clash = '[[event]]\nid = 12405200\ninstructions = ["EndUnconditionally(End)"]\n' \
@@ -156,6 +164,12 @@ class BuildTests(unittest.TestCase):
                       'the file; left out', self.lines)
         self.assertIn('Script edits: Same: m24_01_00_00.emevd.edit.toml: event 12405000 is already '
                       'in the file; left out', self.lines)
+
+    def test_an_edit_file_with_a_utf8_bom_applies(self):
+        name, folder = self.mod('Bom', '')
+        (folder / 'edits/event/m24_01_00_00.emevd.edit.toml').write_bytes(b'\xef\xbb\xbf' + EDIT_A.encode())
+        self.build([(name, folder)])
+        self.assertEqual(ids(self.result()), [0, 50, 12405000])
 
     def test_nothing_written_when_nothing_applies(self):
         self.assertIsNone(self.build([self.mod('Bad', 'nonsense = ')]))
@@ -216,11 +230,43 @@ class ModsMergeTests(unittest.TestCase):
         self.assertIn('Script edits: dvdroot_ps4/event/m24_01_00_00.emevd.dcx: A, B', log)
         self.assertEqual((self.game / self.event).read_bytes(), self.original)
         self.assertFalse((view / 'edits').exists())
+        self.assertEqual([p.name for p in (view / 'dvdroot_ps4/event').iterdir()],
+                         ['m24_01_00_00.emevd.dcx'])  # no .toml in the overlay (port-a2866f9-N2)
         # Mods off: neither the file mod nor the edits.
         view, log = self.run_mods('0')
         self.assertEqual(ids(dcx_decompress((view / self.event).read_bytes())), [0, 50])
         self.assertNotIn('Script edits', log)
         self.assertFalse((self.root / 'out/script_edits').exists())
+
+    def test_a_value_that_does_not_pack_leaves_that_mod_out_and_the_game_starts(self):
+        # port-a2866f9-F1: struct.pack raised OverflowError for f32:1e40 and mods.py exited 1.
+        (self.mods / 'Bad/edits/event').mkdir(parents=True)
+        (self.mods / 'Bad/edits/event/m24_01_00_00.emevd.edit.toml').write_text(
+            '[[event]]\nid = 12405300\ninstructions = [{bank = 1001, id = 0, args = ["f32:1e40"]}]\n')
+        view, log = self.run_mods()
+        self.assertEqual(ids(dcx_decompress((view / self.event).read_bytes())),
+                         [0, 50, 777, 12405000, 12405100])
+        self.assertIn('Script edits: Bad: m24_01_00_00.emevd.edit.toml: event 12405300, instruction 1: '
+                      '1e+40 does not fit a f32', log)
+
+    def test_an_unexpected_error_leaves_that_mod_out(self):
+        # Whatever a mod's data does, build() logs it and goes on (the class of port-a2866f9-F1).
+        lines = []
+        original = dcx_compress(small_emevd())
+        root = self.root / 'unexpected'
+        for name in ('Boom', 'Good'):
+            (root / name / 'edits/event').mkdir(parents=True)
+            (root / name / 'edits/event/m24_01_00_00.emevd.edit.toml').write_text(EDIT_B if name == 'Good' else 'x')
+        real = se.parse
+        se.parse = lambda text: (_ for _ in ()).throw(RecursionError('deep')) if text == 'x' else real(text)
+        try:
+            se.build(lambda rel: original, [('Boom', root / 'Boom'), ('Good', root / 'Good')],
+                     root / 'out', log=lines.append)
+        finally:
+            se.parse = real
+        self.assertIn('Script edits: Boom: m24_01_00_00.emevd.edit.toml: could not be applied '
+                      '(RecursionError: deep); left out. Please report this.', lines)
+        self.assertIn('Script edits: dvdroot_ps4/event/m24_01_00_00.emevd.dcx: Good', lines)
 
     def test_the_folder_names_agree_with_mods_py(self):
         sys.path.insert(0, str(ROOT / 'scripts'))

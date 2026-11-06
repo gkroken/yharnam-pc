@@ -60,8 +60,11 @@ CONDITION_STATE = {'FAIL': 0, 'PASS': 1}
 END_TYPE = {'End': 0, 'Restart': 1}
 FLAG_TYPE = {'EventFlag': 0, 'EventID': 1, 'EventIDAndSlotNumber': 2}
 
-# Built-in instructions: name -> (bank, id, ((type, enum or None), ...)). Each layout is the one
-# the port's own event edits use (scripts/boss_rematches.py), which run in the game.
+# Built-in instructions: name -> (bank, id, ((type, enum or None), ...)). Five layouts are the ones
+# the port's own event edits write in the game (scripts/boss_rematches.py: IfEventFlag,
+# EndUnconditionally, EndIfEventFlag, SetEventFlag, WarpPlayerToRespawnPoint). IfConditionGroup's
+# and AwardItemLot's match every use of 0:0 and 2003:4 in the game's own event files
+# (port-a2866f9-N1).
 INSTRUCTIONS = {
     'IfConditionGroup': (0, 0, (('s8', CONDITION_GROUP), ('u8', CONDITION_STATE), ('s8', CONDITION_GROUP))),
     'IfEventFlag': (3, 0, (('s8', CONDITION_GROUP), ('u8', ON_OFF_CHANGE), ('u8', FLAG_TYPE), ('s32', None))),
@@ -89,7 +92,10 @@ def pack(bank, code, args):
             raise EditError(f'{value!r} is not a {kind}')
         size = struct.calcsize(code_char)
         data.extend(bytes(-len(data) % size))
-        data.extend(struct.pack('<' + code_char, value))
+        try:
+            data.extend(struct.pack('<' + code_char, value))
+        except (struct.error, OverflowError) as error:  # 1e40 as an f32 (port-a2866f9-F1)
+            raise EditError(f'{value!r} does not fit a {kind} ({error})') from None
     data.extend(bytes(-len(data) % 4))
     return bank, code, bytes(data)
 
@@ -271,9 +277,14 @@ def build(base, mods, out, log=print):
         applied = []
         for name, path in edits:
             try:
-                data = apply(data, parse(path.read_text(encoding='utf-8')))
+                # utf-8-sig: Windows editors and PowerShell 5.1 write a BOM (port-a2866f9-F2).
+                data = apply(data, parse(path.read_text(encoding='utf-8-sig')))
             except (EditError, OSError, UnicodeDecodeError) as error:
                 log(f'Script edits: {name}: {path.name}: {error}; left out')
+                continue
+            except Exception as error:  # noqa: BLE001 - a mod's data must never stop the start
+                log(f'Script edits: {name}: {path.name}: could not be applied '
+                    f'({type(error).__name__}: {error}); left out. Please report this.')
                 continue
             applied.append(name)
         if not applied:
