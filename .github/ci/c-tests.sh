@@ -8,19 +8,19 @@ set -uo pipefail
 cd -- "$(dirname -- "$0")/../.."
 
 # Upstream's tests that can't run on Windows here (tools/test-baseline.txt in the tool repo
-# lists the same seven as known failures). Nothing of the plugins branch may be added.
-not_run() {
-    case $1 in
-    camera-motion-test | scene-resolution-test | taa-shader-test)
-        echo 'upstream: undefined symbols when linked on Windows (runtime_memory_is_mapped, runtime_atlas_*, ...)' ;;
-    upscaler-support-test) echo 'upstream: uses POSIX setenv/unsetenv' ;;
-    trophy-data-test | trophy-history-test | trophy-toast-test)
-        echo 'upstream: needs a trophy data file as its argument' ;;
-    *) return 1 ;;
-    esac
-}
-not_run_list='camera-motion-test scene-resolution-test taa-shader-test upscaler-support-test
-trophy-data-test trophy-history-test trophy-toast-test'
+# lists the same seven as known failures). Nothing of the plugins branch may be added. One
+# table holds both the reasons and the names the stale check walks (port-aef0eef-N1).
+unlinked='upstream: undefined symbols when linked on Windows (runtime_memory_is_mapped, runtime_atlas_*, ...)'
+no_data='upstream: needs a trophy data file as its argument'
+declare -A not_run=(
+    [camera-motion-test]=$unlinked
+    [scene-resolution-test]=$unlinked
+    [taa-shader-test]=$unlinked
+    [upscaler-support-test]='upstream: uses POSIX setenv/unsetenv'
+    [trophy-data-test]=$no_data
+    [trophy-history-test]=$no_data
+    [trophy-toast-test]=$no_data
+)
 # Fewer targets than this means the CMake setup lost tests, not a clean run (39 on 2026-11-06).
 min_targets=39
 
@@ -43,7 +43,7 @@ if (( count < min_targets )); then
     echo "::error title=too few test targets::found $count *-test targets, expected at least $min_targets"
     failed=1
 fi
-for t in $not_run_list; do
+for t in "${!not_run[@]}"; do
     if ! printf '%s\n' "$targets" | grep -qx -- "$t"; then
         echo "::error title=stale not-run entry::$t is listed as not run but is no longer a target: take it out of .github/ci/c-tests.sh"
         failed=1
@@ -51,8 +51,8 @@ for t in $not_run_list; do
 done
 ran=0
 for t in $targets; do
-    if reason=$(not_run "$t"); then
-        echo "NOT RUN $t: $reason"
+    if [[ -v not_run[$t] ]]; then
+        echo "NOT RUN $t: ${not_run[$t]}"
         continue
     fi
     ran=$((ran + 1))
