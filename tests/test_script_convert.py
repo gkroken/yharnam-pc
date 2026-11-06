@@ -131,7 +131,7 @@ class ConvertTests(unittest.TestCase):
                 self.assertEqual(sc.main([str(js), '--emedf', str(emedf), '--events', '12415990']), 0)
             self.assertEqual([e.id for e in se.parse(out.getvalue())], [12415990])
             # --out writes UTF-8 whatever the shell would (tool-97b03e7-F1).
-            out_file = Path(temp) / 'edit.toml'
+            out_file = Path(temp) / 'mods/new_mod/edits/event/edit.toml'  # folders not there yet
             self.assertEqual(sc.main([str(js), '--emedf', str(emedf), '--events', '12415990',
                                       '--out', str(out_file)]), 0)
             self.assertEqual(out_file.read_bytes().decode('utf-8'), out.getvalue())

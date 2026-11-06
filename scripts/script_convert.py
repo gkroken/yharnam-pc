@@ -183,6 +183,7 @@ def main(argv=None):
         table = load_emedf(args.emedf.read_text(encoding='utf-8-sig'))
         text = convert(args.script.read_text(encoding='utf-8-sig'), table, wanted)
         if args.out:
+            args.out.parent.mkdir(parents=True, exist_ok=True)  # a new mod's edits\event (tool-e0f3993-F1)
             args.out.write_text(text, encoding='utf-8', newline='\n')  # never the shell's encoding
         else:
             sys.stdout.write(text)
