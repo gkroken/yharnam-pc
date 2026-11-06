@@ -181,6 +181,14 @@ class CompiledTests(unittest.TestCase):
                 with self.assertRaises(sc.ConvertError) as caught:
                     sc.convert_compiled(self.mine, self.game, wanted)
                 self.assertIn(why, str(caught.exception))
+        # port-dcb27fd-N1: an instruction with a layer (its row's last field set).
+        from emevd import Emevd
+        layered = Emevd(self.mine)
+        count, first = self.struct.unpack_from('<qq', layered.events[-1], 8)
+        self.struct.pack_into('<q', layered.instructions[first // 0x20], 24, 0)
+        with self.assertRaises(sc.ConvertError) as caught:
+            sc.convert_compiled(layered.to_bytes(), self.game, [778])
+        self.assertIn('event 778: instruction 1 uses layers: not converted', str(caught.exception))
         with self.assertRaises(sc.ConvertError) as caught:
             sc.convert_compiled(self.game, self.game)
         self.assertIn("no event the game's file doesn't have", str(caught.exception))

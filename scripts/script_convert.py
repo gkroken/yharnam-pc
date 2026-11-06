@@ -223,6 +223,12 @@ def convert_compiled(mine, game, wanted=None):
             raise ConvertError(f'event {event_id} has parameters: not converted')
         if rest not in REST_NAMES:
             raise ConvertError(f'event {event_id}: rest behaviour {rest} is not 0, 1 or 2')
+        # An instruction's layer (its row's last field; none: -1, as 0xffffffff) isn't part of
+        # (bank, id, args): converting one would drop it (port-dcb27fd-N1).
+        count, first = struct.unpack_from('<qq', row, 8)
+        for k, ins in enumerate(ours.instructions[first // 0x20:first // 0x20 + count]):
+            if struct.unpack_from('<q', ins, 24)[0] not in (-1, 0xffffffff):
+                raise ConvertError(f'event {event_id}: instruction {k + 1} uses layers: not converted')
         lines = [f'    {{ bank = {bank}, id = {code}, hex = "{args.hex()}" }},'
                  for bank, code, args in ours.event_instructions(event_id)]
         if not lines:
