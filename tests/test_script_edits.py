@@ -427,6 +427,24 @@ class GameTalkTests(unittest.TestCase):
         hub = dcx_decompress((self.talk / 'm10_00_00_00.talkesdbnd.dcx').read_bytes())
         (_s, _n, _e, why), = [m for m in se.menus(hub) if m[0] == 't100000']
         self.assertEqual(why, "its menu isn't of the usual shape (the choice isn't read first)")
+        # port-53830c3-N1: a menu (with an entry of its own) that leads straight into Gilbert's: its
+        # entry is its own, not Gilbert's menu's.
+        archive = se.Bnd4(self.cy)
+        i = archive.index('\\t241335.esd')
+        script = se.esd.parse(archive.files[i])
+        group, menu = next((g, si) for g in script.groups for si in g.states
+                           if script.states[si].entry >= 0 and se.SHOW_MENU in
+                           [(script.cmds[c].bank, script.cmds[c].id) for c in script.runs[script.states[si].entry].items])
+        lit = lambda v: se.esd.done(se.esd.lit(v))  # noqa: E731
+        other = script.state(max(script.states[si].id for si in group.states) + 1)
+        group.states.append(other)
+        script.states[other].entry = script.run([script.cmd(1, 19, [lit(9), lit(777), lit(-1)]),
+                                                 script.cmd(1, 10, [lit(0), lit(0), lit(0)])])
+        script.states[other].conds = script.run([script.cond(menu, lit(1))])
+        archive.files[i] = se.esd.serialize(script)
+        found = {(s, n): e for s, n, e, _why in se.menus(archive.to_bytes()) if s == 't241335'}
+        self.assertEqual(sorted(found.values()), sorted([
+            [(1, 14000100), (2, 14000101), (3, 14000102), (4, 14000103), (50, 15000005)], [(9, 777)]]))
         out = io.StringIO()
         with unittest.mock.patch('sys.stdout', out):
             self.assertEqual(se.main([str(GAME), 'm24_01_00_00']), 0)

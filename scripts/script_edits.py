@@ -469,15 +469,18 @@ def _entries(script, group, menu):
         conds = script.states[si].conds
         for c in (script.runs[conds].items if conds >= 0 else []):
             leads_to.setdefault(script.conds[c].target, []).append(si)
+    def ids(si):
+        entry = script.states[si].entry
+        return [(script.cmds[c].bank, script.cmds[c].id) for c in (script.runs[entry].items if entry >= 0 else [])]
+
     seen, todo = {menu}, [menu]
     while todo:
         si = todo.pop()
-        entry = script.states[si].entry
-        ids = [(script.cmds[c].bank, script.cmds[c].id) for c in (script.runs[entry].items if entry >= 0 else [])]
-        if si != menu and (CLEAR_LIST in ids or SHOW_MENU in ids):
-            continue  # the list starts here, or another menu ends: don't go further back
+        if si != menu and CLEAR_LIST in ids(si):
+            continue  # the list starts here: don't go further back
         for before in leads_to.get(si, []):
-            if before not in seen:
+            # Another menu's state, and what leads to it, is that menu's (port-53830c3-N1).
+            if before not in seen and SHOW_MENU not in ids(before):
                 seen.add(before)
                 todo.append(before)
     entries = []
