@@ -33,7 +33,12 @@ them. `BB_PLUGIN_DIRS` (separated by `;`) replaces both folders; the tests use i
   lua = 1             ; lets the Lua host's scripts warp the player (player_warp), never online
   ```
   `1`, `true` and `on` turn a plugin on; `0`, `false` and `off` turn it off. A plugin flagged
-  `BB_PLUGIN_OPT_IN` stays off until it is turned on.
+  `BB_PLUGIN_OPT_IN` stays off until it is turned on. A `;` or `#` after a space or tab starts a
+  comment, so a value can't hold one (`message = Wave #1` reads `Wave`); without the space it's
+  part of the value (`red;dark`).
+- **Warps** (`[warps]`): `lua = 1` lets the Lua host warp the player, and so any Lua script it
+  runs, mods' scripts included, unless each script needs its own grant too. bb_lua asks that
+  (`docs/LUA.md`). Online play refuses granted warps.
 - **Online play** (`BB_ONLINE=1` without seamless co-op's `BB_COOP=1`) leaves out every plugin
   flagged `BB_PLUGIN_GAMEPLAY`. This is the same rule that turns cheats off online.
 
