@@ -230,6 +230,27 @@ int main(void) {
     CHECK(image[0x10] == 0x90);
     bb_plugins_reset();
 
+    /* 5b. A plugin renamed to turn it off stays off: "*.dll" also finds "good.dll_off" and
+     * "good.dllx" through their 8.3 short names (GOOD~1.DLL), on volumes that make them. */
+    {
+        char renamed[MAX_PATH], from[MAX_PATH], to[MAX_PATH], short_name[MAX_PATH];
+        snprintf(renamed, sizeof renamed, "%s\\renamed", user);
+        CreateDirectoryA(renamed, NULL);
+        snprintf(from, sizeof from, "%s\\good.dll", PLUGIN_DIR_A);
+        int short_dll = 0;
+        for (int i = 0; i < 2; ++i) {
+            snprintf(to, sizeof to, "%s\\%s", renamed, i ? "good.dllx" : "good.dll_off");
+            CHECK(CopyFileA(from, to, FALSE));
+            const DWORD n = GetShortPathNameA(to, short_name, MAX_PATH);
+            if (n >= 4 && n < MAX_PATH && !_stricmp(short_name + n - 4, ".dll")) short_dll = 1;
+        }
+        if (!short_dll) printf("note: this volume makes no 8.3 names, so 5b can't fail here\n");
+        set_env("BB_PLUGIN_DIRS", renamed);
+        CHECK(bb_plugins_install() == 0);
+        bb_plugins_reset();
+        set_env("BB_PLUGIN_DIRS", PLUGIN_DIR_A ";" PLUGIN_DIR_B);
+    }
+
     /* 6. Hooks and calls into the game, from folder C's plugins. */
     set_env("BB_EBOOT_109", "1");
     set_env("BB_PLUGIN_DIRS", PLUGIN_DIR_C);

@@ -12,7 +12,8 @@ bbhost builds here unchanged. This file says what this host does and how it diff
 | `<data>\plugins` | Next to the game's folders: `bbport-windows\plugins` in a package, `port\plugins` in a source tree. |
 | `<user>\plugins` | Beside the saves (`BB_GPU_USER_DIR`, default `<data>\user`). A file here replaces a file of the same name above. |
 
-Only `*.dll` files directly in a folder load, in name order. A plugin that needs other DLLs keeps
+Only `*.dll` files directly in a folder load, in name order; a file renamed to turn it off
+(`x.dll_off`, `x.dllold`) stays off. A plugin that needs other DLLs keeps
 them in a subfolder of its own, and Windows looks in the plugin's own folder first when it loads
 them. `BB_PLUGIN_DIRS` (separated by `;`) replaces both folders; the tests use it.
 

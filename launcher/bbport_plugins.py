@@ -26,6 +26,8 @@ OPTION_LIVE = 0x100
 NAME_RE = re.compile(r'[A-Za-z0-9_-]{1,63}')
 MAX_OPTIONS = 256          # a table that doesn't end by then is taken as broken
 MAX_TEXT = 4096            # the longest string read out of a DLL
+MAX_EXPORTS = 16384        # a DLL exporting more names is taken as broken (bounds the work a file can cause)
+MAX_PLUGINS = 64           # the most plugins the host loads (plugin_host.c MAX_PLUGINS)
 
 
 class PluginFileError(Exception):
@@ -42,7 +44,7 @@ class _Pe:
         pe = self._u32(0x3C)
         if data[pe:pe + 4] != b'PE\0\0':
             raise PluginFileError('not a Windows DLL')
-        machine, sections, _, _, _, optional_size, _ = struct.unpack_from('<HHIIIHH', data, pe + 4)
+        machine, sections, _, _, _, optional_size, _ = struct.unpack('<HHIIIHH', self._bytes(pe + 4, 20))
         if machine != 0x8664:
             raise PluginFileError('not a 64-bit (x64) DLL')
         optional = pe + 24
@@ -83,13 +85,24 @@ class _Pe:
         raise PluginFileError(f'address {rva:#x} is outside the image')
 
     def text_at_rva(self, rva):
-        out = bytearray()
-        while len(out) < MAX_TEXT:
-            chunk = self.read(rva + len(out), 1)
-            if chunk == b'\0':
-                return out.decode('utf-8', 'replace')
-            out += chunk
-        raise PluginFileError('a string in the DLL has no end')
+        """The NUL-ended string at an address, at most MAX_TEXT bytes. Past a section's file data
+        the image holds zeros, so a string running into them ends there."""
+        for virtual_address, size, raw_at, raw_size in self.sections:
+            if virtual_address <= rva < virtual_address + size:
+                offset = rva - virtual_address
+                if offset >= raw_size:
+                    return ''
+                start = raw_at + offset
+                stop = min(raw_at + raw_size, start + MAX_TEXT + 1, len(self.data))
+                end = self.data.find(b'\0', start, stop)
+                if end < 0:
+                    if stop - start > MAX_TEXT:
+                        raise PluginFileError('a string in the DLL has no end')
+                    if stop == len(self.data) and stop < raw_at + raw_size:
+                        raise PluginFileError('the file is cut short')
+                    end = stop  # the section's file data ends: zeros follow
+                return self.data[start:end].decode('utf-8', 'replace')
+        raise PluginFileError(f'address {rva:#x} is outside the image')
 
     def text_at(self, va):
         """The string a pointer in the image's data points to ('' for NULL)."""
@@ -104,7 +117,9 @@ class _Pe:
         names, functions_at, names_at, ordinals_at = struct.unpack_from('<IIII', directory, 24)
         functions = struct.unpack_from('<I', directory, 20)[0]
         out = {}
-        for i in range(min(names, 65536)):
+        if names > MAX_EXPORTS:
+            raise PluginFileError(f'{names} exported names: more than a plugin has')
+        for i in range(names):
             name = self.text_at_rva(struct.unpack('<I', self.read(names_at + 4 * i, 4))[0])
             ordinal = struct.unpack('<H', self.read(ordinals_at + 2 * i, 2))[0]
             if ordinal < functions:
@@ -143,12 +158,13 @@ class Plugin:
         return self.switch == 1 or (self.switch == -1 and not self.opt_in)
 
 
-def read_plugin(path):
-    """A Plugin with what the DLL's file says about itself; problem is set when it isn't one."""
+def read_plugin(path, data=None):
+    """A Plugin with what the DLL's file says about itself; problem is set when it isn't one.
+    data: the file's bytes, when the caller has them already (else they're read from path)."""
     path = Path(path)
     plugin = Plugin(file=path.name, path=path, name=path.stem)
     try:
-        pe = _Pe(path.read_bytes())
+        pe = _Pe(path.read_bytes() if data is None else data)
         if 'bb_plugin_init' not in pe.exports and 'bb_plugin_image' not in pe.exports:
             plugin.problem = 'exports neither bb_plugin_init nor bb_plugin_image: not a plugin'
             return plugin
@@ -192,11 +208,11 @@ def plugin_dirs(data_dir, user_dir):
     return [Path(data_dir) / 'plugins', Path(user_dir) / 'plugins']
 
 
-def scan(data_dir, user_dir, ini=None, online=False):
+def scan(data_dir, user_dir, ini=None, online=False, all_off=False):
     """Every plugin the game would find, in load order, with whether it would load and why not.
 
     online: online play without seamless co-op (BB_ONLINE=1, BB_COOP unset), which leaves out the
-    plugins flagged as changing the game."""
+    plugins flagged as changing the game. all_off: BB_PLUGINS=0, which loads none."""
     found = {}
     for folder in plugin_dirs(data_dir, user_dir):
         try:
@@ -211,7 +227,12 @@ def scan(data_dir, user_dir, ini=None, online=False):
     for key in sorted(found):
         plugin = read_plugin(found[key])
         plugin.switch = ini.switch(plugin.name)
-        why = plugin.problem
+        if all_off:
+            why = 'no plugin loads (BB_PLUGINS=0)'
+        elif len(loaded) == MAX_PLUGINS:  # the host's first check, before it reads the file
+            why = f'{MAX_PLUGINS} plugins are the most this host loads'
+        else:
+            why = plugin.problem
         if not why and plugin.name.lower() in loaded:
             why = 'another plugin has its name'
         if not why:
@@ -345,31 +366,36 @@ _LOADED = re.compile(r'^(?P<name>[A-Za-z0-9_-]{1,63}) (?:(?P<version>\S+) )?\((?
 _LEFT_OUT = re.compile(r'^(?P<name>.+?) \((?P<file>.+)\): left out, (?P<why>.+)$')
 _UNLOADED = re.compile(r'^(?P<name>[A-Za-z0-9_-]{1,63}): (?P<why>.+); unloaded$')
 _NO_LOAD = re.compile(r'^(?P<file>.+): could not be loaded \((?P<why>.+)\)$')
+_CAPPED = re.compile(r'^(?P<file>.+): left out, (?P<why>\d+ plugins are the most this host loads)$')
 _SCRIPT = re.compile(r'^Plugin lua: (?P<script>[^:]+): (?:loaded \(|stopped: (?P<why>.+)$)')
 
 
 def last_run(log_text):
-    """What the log of one game run says happened to each plugin and Lua script:
-    {'plugins': {name: {'state': 'loaded'|'left out'|'unloaded'|'failed', 'why': ..., 'file': ...}},
+    """What the log of one game run says happened to each plugin DLL and Lua script:
+    {'plugins': {file name: {'name': ..., 'state': 'loaded'|'left out'|'unloaded'|'failed', 'why': ...}},
      'scripts': {script: {'state': 'running'|'stopped', 'why': ...}}}.
-    A DLL Windows couldn't load has no name yet: it's keyed by its file name ('x.dll'). 'file' is
-    the DLL's file name where the line gives it. The last line about a plugin wins."""
-    plugins, scripts = {}, {}
+    Keyed by the DLL's file name ('x.dll', as scan()'s Plugin.file), since two files may declare
+    one name: the host loads the first and leaves out the other. An "unloaded" line names the
+    plugin only; it's the file loaded under that name. 'name' is '' where the line gives none."""
+    plugins, scripts, loaded_as = {}, {}, {}
     for line in log_text.splitlines():
         line = line.rstrip('\r')
         if line.startswith('Plugins: '):
             body = line[len('Plugins: '):]
-            for pattern, state in ((_LEFT_OUT, 'left out'), (_UNLOADED, 'unloaded'), (_NO_LOAD, 'failed'),
-                                   (_LOADED, 'loaded')):
+            for pattern, state in ((_CAPPED, 'left out'), (_LEFT_OUT, 'left out'), (_UNLOADED, 'unloaded'),
+                                   (_NO_LOAD, 'failed'), (_LOADED, 'loaded')):
                 match = pattern.match(body)
                 if not match:
                     continue
                 groups = match.groupdict()
-                file = Path(groups['file'].replace('\\', '/')).name if groups.get('file') else ''
-                key = groups.get('name') or file
-                if not file and key in plugins:
-                    file = plugins[key]['file']  # "x: ...; unloaded" names no file: keep the load line's
-                plugins[key] = {'state': state, 'why': groups.get('why') or '', 'file': file}
+                name = groups.get('name') or ''
+                if groups.get('file'):
+                    file = Path(groups['file'].replace('\\', '/')).name
+                else:
+                    file = loaded_as.get(name.lower(), name)
+                if state == 'loaded':
+                    loaded_as[name.lower()] = file
+                plugins[file] = {'name': name, 'state': state, 'why': groups.get('why') or ''}
                 break
         else:
             match = _SCRIPT.match(line)

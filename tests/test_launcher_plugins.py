@@ -153,9 +153,40 @@ class ReadPluginTests(Folder):
         options = Dll().plugin().info()
         options.exports['bb_plugin_options'] = options.add(
             struct.pack('<I4xQQQQddQ', 1, 0, 0, 0, 0, 0, 0, 0) * (bp.MAX_OPTIONS + 1) + bytes(64))
-        for what, dll in {'outside': outside, 'below': below, 'endless string': endless, 'options': options}.items():
+        # bb_plugin_info's 48 bytes start 8 bytes before the end of the image's one section (its
+        # contents are padded to 0x200 bytes), so they run past it.
+        straddling = Dll().plugin()
+        straddling.exports['bb_plugin_info'] = DATA_RVA + 0x200 - 8
+        self.assertEqual(struct.unpack_from('<I', straddling.bytes(), 0x98 + 240 + 8)[0], 0x200)
+        straddling = Dll().plugin()
+        straddling.exports['bb_plugin_info'] = DATA_RVA + 0x200 - 8
+        for what, dll in {'outside': outside, 'below': below, 'endless string': endless, 'options': options,
+                          'struct past the image': straddling}.items():
             with self.subTest(what):
                 self.assertTrue(self.read(dll).problem.startswith("can't be read"), self.read(dll).problem)
+
+
+    def test_no_cut_or_corruption_escapes_as_an_exception(self):
+        """port-4409141-F1: a file cut inside its COFF header raised struct.error out of read_plugin().
+        Every cut of a whole plugin, and seeded random corruption, must give a Plugin back."""
+        import random
+        dll = Dll().plugin().function('bb_plugin_init').info(flags=bp.GAMEPLAY)
+        dll.options([(4, 'order', 'Order', 'help', 'story', 0, 0, 'story|random'), (2, 'n', 'N', None, '1', 0, 9, None)])
+        whole = dll.bytes()
+        self.assertEqual(self.read(whole).problem, '')
+        self.assertTrue(self.read(whole[:0x80 + 4 + 10]).problem.startswith("can't be read"))  # in the COFF header
+        path = self.root / 'fuzz.dll'  # never written: the bytes are passed in
+        for cut in range(len(whole)):
+            with self.subTest(cut=cut):
+                self.assertIsInstance(bp.read_plugin(path, whole[:cut]), bp.Plugin)
+        rng = random.Random(4409141)
+        for i in range(3000):
+            data = bytearray(whole)
+            for _ in range(rng.randint(1, 6)):
+                at = rng.randrange(0x200) if rng.random() < 0.5 else rng.randrange(len(data))
+                data[at] = rng.randrange(256)
+            with self.subTest(corruption=i):
+                self.assertIsInstance(bp.read_plugin(path, bytes(data)), bp.Plugin)
 
 
 class ScanTests(Folder):
@@ -205,6 +236,20 @@ class ScanTests(Folder):
         found = self.scan()
         self.assertFalse(found['a_first.dll'].loads)
         self.assertTrue(found['b_second.dll'].loads)
+
+    def test_the_host_cap_and_all_off(self):
+        """port-4409141-N1: the host loads at most 64; BB_PLUGINS=0 loads none."""
+        self.dll('data', 'a_off.dll', name='a_off')
+        for i in range(bp.MAX_PLUGINS + 1):
+            self.dll('data', f'p{i:02}.dll', name=f'p{i:02}')
+        found = self.scan('[plugins]\na_off = 0\n')
+        self.assertEqual(sum(p.loads for p in found.values()), bp.MAX_PLUGINS)
+        self.assertEqual(found['a_off.dll'].why, 'off in plugins.ini')  # off ones don't count
+        self.assertTrue(found['p63.dll'].loads)
+        self.assertEqual(found['p64.dll'].why, '64 plugins are the most this host loads')
+        everything_off = {p.file: p for p in bp.scan(self.data, self.user, all_off=True)}
+        self.assertFalse(any(p.loads for p in everything_off.values()))
+        self.assertEqual(everything_off['p00.dll'].why, 'no plugin loads (BB_PLUGINS=0)')
 
     def test_a_broken_dll_is_listed_with_its_problem(self):
         self.put('data/plugins/broken.dll', b'MZ nonsense')
@@ -277,6 +322,10 @@ class LastRunTests(unittest.TestCase):
         r'Plugins: C:\x (old)\plugins\gone.dll: could not be loaded (Windows error 126)',
         r'Plugins: fails 1.2.3 (C:\x\plugins\fails.dll)',
         'Plugins: fails: bb_plugin_image returned 1; unloaded',
+        # Two files, one name (port-4409141-F2): the first loads, the second is left out.
+        r'Plugins: weapon_tweak 1.0.0 (C:\x\port\plugins\weapon_tweak.dll)',
+        r'Plugins: weapon_tweak (C:\x\port\user\plugins\zz_dup.dll): left out, another plugin has its name',
+        r'Plugins: C:\x (old)\plugins\many.dll: left out, 64 plugins are the most this host loads',
         'Plugins: 3 loaded',
         r'Plugin lua: hello: loaded (C:\u\plugins\lua\hello.lua)',
         'Plugin lua: mymod/main: stopped: main.lua:3: attempt to call a nil value',
@@ -286,13 +335,16 @@ class LastRunTests(unittest.TestCase):
     def test_states(self):
         run = bp.last_run(self.LOG)
         self.assertEqual(run['plugins'], {
-            'lua': {'state': 'loaded', 'why': '', 'file': 'bb_lua.dll'},
-            'plain': {'state': 'loaded', 'why': '', 'file': 'plain.dll'},
-            'bad name!': {'state': 'left out', 'why': 'its name must be 1-63 letters', 'file': 'badname.dll'},
-            'future': {'state': 'left out', 'why': "built for a newer plugin API than this host's (99 > 16)",
-                       'file': 'future.dll'},
-            'gone.dll': {'state': 'failed', 'why': 'Windows error 126', 'file': 'gone.dll'},
-            'fails': {'state': 'unloaded', 'why': 'bb_plugin_image returned 1', 'file': 'fails.dll'},
+            'bb_lua.dll': {'name': 'lua', 'state': 'loaded', 'why': ''},
+            'plain.dll': {'name': 'plain', 'state': 'loaded', 'why': ''},
+            'badname.dll': {'name': 'bad name!', 'state': 'left out', 'why': 'its name must be 1-63 letters'},
+            'future.dll': {'name': 'future', 'state': 'left out',
+                           'why': "built for a newer plugin API than this host's (99 > 16)"},
+            'gone.dll': {'name': '', 'state': 'failed', 'why': 'Windows error 126'},
+            'fails.dll': {'name': 'fails', 'state': 'unloaded', 'why': 'bb_plugin_image returned 1'},
+            'weapon_tweak.dll': {'name': 'weapon_tweak', 'state': 'loaded', 'why': ''},
+            'zz_dup.dll': {'name': 'weapon_tweak', 'state': 'left out', 'why': 'another plugin has its name'},
+            'many.dll': {'name': '', 'state': 'left out', 'why': '64 plugins are the most this host loads'},
         })
         self.assertEqual(run['scripts'], {
             'hello': {'state': 'running', 'why': ''},

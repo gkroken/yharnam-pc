@@ -857,6 +857,10 @@ static int scan(Candidate *out, int max) {
         if (h == INVALID_HANDLE_VALUE) continue;
         do {
             if (found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+            /* *.dll also matches a long name whose 8.3 short name ends in .DLL: "x.dll_off",
+             * "x.dllx". A player who renamed a plugin to turn it off means it to stay off. */
+            const size_t len = wcslen(found.cFileName);
+            if (len < 4 || _wcsicmp(found.cFileName + len - 4, L".dll")) continue;
             int at = -1;
             for (int i = 0; i < n; ++i)
                 if (!_wcsicmp(out[i].file, found.cFileName)) at = i;
