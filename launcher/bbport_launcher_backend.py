@@ -1113,7 +1113,8 @@ class LauncherBackend(QObject):
             online = env.get('BB_ONLINE') == '1' and env.get('BB_COOP') != '1'
             mods = [(m['name'], self._mods_dir() / m['name'], m['enabled']) for m in self._mods]
             self._plugin_page = bbport_plugins.page_rows(core.DATA_DIR, user, mods, online=online,
-                                                         all_off=env.get('BB_PLUGINS') == '0', log_text=log)
+                                                         all_off=env.get('BB_PLUGINS') == '0', log_text=log,
+                                                         mods_on=env.get('BB_MODS_ENABLED', '1') == '1')
         except Exception as error:  # noqa: BLE001 - the page must never take the launcher down
             self._plugin_page = {'plugins': [], 'scripts': [], 'luaNote': '',
                                  'problem': f"The plugins and scripts couldn't be listed: {error}"}

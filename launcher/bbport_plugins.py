@@ -443,11 +443,12 @@ _LAST_RUN = {
 }
 
 
-def page_rows(data_dir, user_dir, mods=(), online=False, all_off=False, log_text=None):
+def page_rows(data_dir, user_dir, mods=(), online=False, all_off=False, log_text=None, mods_on=True):
     """What the Mods page shows, worded here so it's tested: every plugin with its switch, what the
     next start will do and what the last run did; every Lua script; and a line about the Lua host.
 
-    mods: (name, folder, enabled) as for lua_scripts(). log_text: the last run's log, or None."""
+    mods: (name, folder, enabled) as for lua_scripts(). log_text: the last run's log, or None.
+    mods_on: the launcher's switch for all mods (BB_MODS_ENABLED); off, no mod's script runs."""
     run = last_run(log_text) if log_text else {'plugins': {}, 'scripts': {}}
     ini = PluginsIni(Path(user_dir) / 'plugins.ini')
     plugins = scan(data_dir, user_dir, ini=ini, online=online, all_off=all_off)
@@ -473,7 +474,10 @@ def page_rows(data_dir, user_dir, mods=(), online=False, all_off=False, log_text
     scripts = []
     for s in lua_scripts(user_dir, mods):
         last = run['scripts'].get(s['name'])
-        if not s['enabled']:
+        if s['mod'] and not mods_on:
+            s['enabled'] = False
+            state = 'Off: mods are turned off'  # bb_lua follows BB_MODS_ENABLED (tool-f91e77f-F1)
+        elif not s['enabled']:
             state = 'Off with its mod'
         elif last and last['state'] == 'stopped':
             state = f"Last run: stopped: {last['why']}"

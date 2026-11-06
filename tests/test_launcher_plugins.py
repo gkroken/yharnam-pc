@@ -442,6 +442,19 @@ class PageRowsTests(Folder):
         page, _ = self.rows()
         self.assertEqual(page['luaNote'], 'Lua scripts need bb_lua.dll in a plugins folder.')
 
+    def test_mods_turned_off_turn_their_scripts_off(self):
+        """tool-f91e77f-F1: the launcher's switch for all mods (BB_MODS_ENABLED) stops mods' scripts."""
+        self.put('mods/on_mod/scripts/main.lua', '-- x')
+        mods = [('on_mod', self.root / 'mods/on_mod', True), ('off_mod', self.root / 'mods/off_mod', False)]
+        on = bp.page_rows(self.data, self.user, mods)['scripts']
+        self.assertEqual([(s['name'], s['enabled'], s['state']) for s in on],
+                         [('bad', True, ''), ('hello', True, ''), ('on_mod/main', True, ''),
+                          ('off_mod/main', False, 'Off with its mod')])
+        off = bp.page_rows(self.data, self.user, mods, mods_on=False)['scripts']
+        self.assertEqual([(s['name'], s['enabled'], s['state']) for s in off],
+                         [('bad', True, ''), ('hello', True, ''), ('on_mod/main', False, 'Off: mods are turned off'),
+                          ('off_mod/main', False, 'Off: mods are turned off')])
+
     def test_an_unreadable_plugins_ini_is_a_line_on_the_page(self):
         page, rows = self.rows()
         self.assertEqual(page['problem'], '')
